@@ -8,7 +8,7 @@ echo '<img src="'.save_favicon($url).'">';
 function save_favicon($url, $path='./') {
   $url = parse_url($url, PHP_URL_HOST);
   $file = $path.$url.'.png';
-  if ( !file_exists()) {
+  if ( !file_exists($file)) {
   $fp = fopen ($file, 'w+');
     $ch = curl_init('http://www.google.com/s2/favicons?domain='.$url);
     curl_setopt($ch, CURLOPT_TIMEOUT, 3);
