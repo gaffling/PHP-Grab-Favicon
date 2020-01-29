@@ -42,7 +42,7 @@ Infos about Favicon
 -------------------
 https://github.com/audreyr/favicon-cheat-sheet
 
-###### Copyright 2019 Igor Gaffling
+###### Copyright 2019-2020 Igor Gaffling
 
 */ 
 
@@ -84,6 +84,10 @@ foreach ($favicons as $favicon) {
 echo '<br><br><tt>Runtime: '.round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2).' Sec.';
 
 function grap_favicon( $options=array() ) {
+  
+  // avoid script runtime timeout
+  $max_execution_time = ini_get("max_execution_time");
+  set_time_limit(0); // 0 = no timelimit
 
   // Ini Vars
   $url       = (isset($options['URL']))?$options['URL']:'gaffling.com';
@@ -117,6 +121,7 @@ function grap_favicon( $options=array() ) {
 
 	// Make Path & Filename
 	$filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.png');
+	// change save path & filename of icons ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 
 
 	// If Favicon not already exists local
   if ( !file_exists($filePath) or @filesize($filePath)==0 ) {
@@ -237,6 +242,9 @@ function grap_favicon( $options=array() ) {
 	  print('<b style="color:red;">Image</b> <img style="width:32px;" 
 	         src="data:image/png;base64,'.base64_encode($content).'"><hr size="1">');
   }
+	
+  // reset script runtime timeout
+  set_time_limit($max_execution_time); // set it back to the old value
 
   // Return Favicon Url
   return $filePath;
