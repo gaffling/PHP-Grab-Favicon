@@ -1,7 +1,7 @@
 PHP Grab Favicon
 ================
 
-> This `PHP Favicon Grabber` use a given url, save a copy (if wished) and return the image path.
+> This `PHP Favicon Grabber v1.1` use a given url, save a copy (if wished) and return the image path.
 
 How it Works
 ------------
@@ -39,4 +39,4 @@ Infos about Favicon
 -------------------
 https://github.com/audreyr/favicon-cheat-sheet
 
-###### Copyright 2019 Igor Gaffling
+###### Copyright 2019-2020 Igor Gaffling
