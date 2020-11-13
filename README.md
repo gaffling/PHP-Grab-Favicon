@@ -1,5 +1,4 @@
-PHP Grab Favicon
-================
+![PHP-Grab-Favicon](https://socialify.git.ci/gaffling/PHP-Grab-Favicon/image?description=1&font=KoHo&language=1&owner=1&stargazers=1&theme=Dark)
 
 > This `PHP Favicon Grabber v1.1` use a given url, save a copy (if wished) and return the image path.
 
