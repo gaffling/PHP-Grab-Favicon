@@ -44,47 +44,130 @@ https://github.com/audreyr/favicon-cheat-sheet
 
 ###### Copyright 2019-2020 Igor Gaffling
 
-*/ 
+*/
 
-$testURLs = array(
-  'http://aws.amazon.com',
-  'http://www.apple.com',
-  'http://www.dribbble.com',
-  'http://www.github.com',
-  'http://www.intercom.com',
-  'http://www.indiehackers.com',
-  'http://www.medium.com',
-  'http://www.mailchimp.com',
-  'http://www.netflix.com',
-  'http://www.producthunt.com',
-  'http://www.reddit.com',
-  'http://www.slack.com',
-  'http://www.soundcloud.com',
-  'http://www.stackoverflow.com',
-  'http://www.techcrunch.com',
-  'http://www.trello.com',
-  'http://www.vimeo.com',
-  'https://www.whatsapp.com/',
-  'https://www.gaffling.com/',
+/* Defaults */
+
+$console_mode = false;
+$localPath = ".";
+$save_local = true;
+$try_homepage = true;
+$debug = null;
+$testURLs = array();
+
+/* Command Line Options */
+$shortopts  = "";
+$shortopts  = "l::";
+$shortopts  = "p::";
+$shortopts .= "h?";
+
+$longopts  = array(
+  "list::",
+  "path::",
+  "usestdin",
+  "tryhomepage",
+  "onlyuseapis",
+  "store",
+  "nostore",
+  "debug",
+  "help",
 );
+
+$options = getopt($shortopts, $longopts);
+
+/* Process Options */
+
+$opt_list = null;
+$opt_localpath = null;
+$opt_usestdin = null;
+$opt_tryhomepage = null;
+$opt_storelocal = null;
+$opt_debug = null;
+
+if (isset($options['list'])) { $opt_list = $options['list']; }
+if (isset($options['path'])) { $opt_localpath = $options['path']; }
+if (isset($options['l'])) { $opt_list = $options['l']; }
+if (isset($options['p'])) { $opt_localpath = $options['p']; }
+if (isset($options['store'])) { $opt_storelocal = true; }
+if (isset($options['nostore'])) { $opt_storelocal = false; }
+if (isset($options['tryhomepage'])) { $opt_tryhomepage = true; }
+if (isset($options['onlyuseapis'])) { $opt_tryhomepage = false; }
+if (isset($options['debug'])) { $opt_debug = true; }
+
+if (!is_null($opt_localpath)) { $localPath = $opt_localpath; }
+if (!is_null($opt_tryhomepage)) { $try_homepage = $opt_tryhomepage; }
+if (!is_null($opt_storelocal)) { $save_local = $opt_storelocal; }
+if (!is_null($opt_storelocal)) { $save_local = $opt_storelocal; }
+if (!is_null($opt_debug)) { if ($opt_debug) { $debug = "true"; } else { $debug = null; } }
+
+# TO DO:
+# stdin
+
+if (isset($opt_list)) {
+  if (file_exists($opt_list)) {
+    $testURLs = file($opt_list,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+  } else {
+    if (count($testURLs) == 0) {
+      $testURLs = explode(",",str_replace(array(",",";"," "),",",$opt_list));
+    }
+  }
+}
+
+if (count($testURLs) == 0) {
+  $testURLs = array(
+    'http://aws.amazon.com',
+    'http://www.apple.com',
+    'http://www.dribbble.com',
+    'http://www.github.com',
+    'http://www.intercom.com',
+    'http://www.indiehackers.com',
+    'http://www.medium.com',
+    'http://www.mailchimp.com',
+    'http://www.netflix.com',
+    'http://www.producthunt.com',
+    'http://www.reddit.com',
+    'http://www.slack.com',
+    'http://www.soundcloud.com',
+    'http://www.stackoverflow.com',
+    'http://www.techcrunch.com',
+    'http://www.trello.com',
+    'http://www.vimeo.com',
+    'https://www.whatsapp.com/',
+    'https://www.gaffling.com/',
+  );
+}
+
+# TO DO
+# check to see that save location is writable if enabled
+
 
 foreach ($testURLs as $url) {
   $grap_favicon = array(
     'URL' => $url,   // URL of the Page we like to get the Favicon from
-    'SAVE'=> true,   // Save Favicon copy local (true) or return only favicon url (false)
-    'DIR' => './',   // Local Dir the copy of the Favicon should be saved
-    'TRY' => true,   // Try to get the Favicon frome the page (true) or only use the APIs (false)
-    'DEV' => null,   // Give all Debug-Messages ('debug') or only make the work (null)
+    'SAVE'=> $save_local,   // Save Favicon copy local (true) or return only favicon url (false)
+    'DIR' => $localPath,   // Local Dir the copy of the Favicon should be saved
+    'TRY' => $try_homepage,   // Try to get the Favicon frome the page (true) or only use the APIs (false)
+    'DEV' => $debug,   // Give all Debug-Messages ('debug') or only make the work (null)
   );
   $favicons[] = grap_favicon($grap_favicon);
 }
+
 foreach ($favicons as $favicon) {
-  echo '<img title="'.$favicon.'" style="width:32px;padding-right:32px;" src="'.$favicon.'">';
+  if ($console_mode) {
+    echo "Icon: $ravicon\n";
+  } else {
+    echo '<img title="'.$favicon.'" style="width:32px;padding-right:32px;" src="'.$favicon.'">';
+  }
 }
-echo '<br><br><tt>Runtime: '.round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2).' Sec.';
+
+if ($console_mode) {
+  # TO DO: console runtime timer
+} else {
+  echo '<br><br><tt>Runtime: '.round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2).' Sec.';
+}
 
 function grap_favicon( $options=array() ) {
-  
+
   // avoid script runtime timeout
   $max_execution_time = ini_get("max_execution_time");
   set_time_limit(0); // 0 = no timelimit
@@ -119,15 +202,18 @@ function grap_favicon( $options=array() ) {
 	// FOR DEBUG ONLY
 	if($DEBUG=='debug')print('<b style="color:red;">Domain</b> #'.@$domain.'#<br>');
 
+  # TO DO: 
+  # this needs to check for different types
+  
 	// Make Path & Filename
 	$filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.png');
-	// change save path & filename of icons ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 
+	// change save path & filename of icons ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 	// If Favicon not already exists local
   if ( !file_exists($filePath) or @filesize($filePath)==0 ) {
 
     // If $trySelf == TRUE ONLY USE APIs
-    if ( isset($trySelf) and $trySelf == TRUE ) {  
+    if ( isset($trySelf) and $trySelf == TRUE ) {
 
       // Load Page
       $html = load($url, $DEBUG);
@@ -138,19 +224,19 @@ function grap_favicon( $options=array() ) {
         $regExPattern = '/href=(\'|\")(.*?)\1/i';
         if ( isset($matchTag[1]) and @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
           if ( isset($matchUrl[2]) ) {
-            
+
             // Build Favicon Link
             $favicon = rel2abs(trim($matchUrl[2]), 'http://'.$domain.'/');
-            
+
           	// FOR DEBUG ONLY
           	if($DEBUG=='debug')print('<b style="color:red;">Match</b> #'.@$favicon.'#<br>');
 
           }
         }
       }
-      
+
       // If there is no Match: Try if there is a Favicon in the Root of the Domain
-    	if ( empty($favicon) ) { 
+    	if ( empty($favicon) ) {
       	$favicon = 'http://'.$domain.'/favicon.ico';
 
       	// Try to Load Favicon
@@ -160,7 +246,7 @@ function grap_favicon( $options=array() ) {
     	}
 
     } // END If $trySelf == TRUE ONLY USE APIs
-        
+
     // If nothink works: Get the Favicon from API
     if ( !isset($favicon) or empty($favicon) ) {
 
@@ -175,7 +261,7 @@ function grap_favicon( $options=array() ) {
       // Favicongrabber API
       if ($random == 2 or empty($favicon)) {
         $echo = json_decode(load('http://favicongrabber.com/api/grab/'.$domain,FALSE),TRUE);
-        
+
         // Get Favicon URL from Array out of json data (@ if something went wrong)
         $favicon = @$echo['icons']['0']['src'];
 
@@ -184,42 +270,58 @@ function grap_favicon( $options=array() ) {
       // Google API (check also md5() later)
       if ($random == 3) {
         $favicon = 'http://www.google.com/s2/favicons?domain='.$domain;
-      } 
-      
+      }
+
       // FOR DEBUG ONLY
       if($DEBUG=='debug')print('<b style="color:red;">'.$random.'. API</b> #'.@$favicon.'#<br>');
 
     } // END If nothink works: Get the Favicon from API
 
-    // Write Favicon local
-    $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.png');
 
     // If Favicon should be saved
     if ( isset($save) and $save == TRUE ) {
-      
+      echo "Saving, loading $favicon\n";
+
       //  Load Favicon
       $content = load($favicon, $DEBUG);
-
+      echo "loaded\n";
+      
       // If Google API don't know and deliver a default Favicon (World)
-      if ( isset($random) and $random == 3 and 
+      if ( isset($random) and $random == 3 and
            md5($content) == '3ca64f83fdcf25135d87e08af65e68c9' ) {
         $domain = 'default'; // so we don't save a default icon for every domain again
 
         // FOR DEBUG ONLY
         if($DEBUG=='debug')print('<b style="color:red;">Google</b> #use default icon#<br>');
-        
+
       }
 
-      // Write 
-      $fh = @fopen($filePath, 'wb');
-      fwrite($fh, $content);
-      fclose($fh);
+      //  Get Type
+      $fileExtension = geticonextension($favicon);
+      if (is_null($fileExtension)) {
+        if ($console_mode) {
+          if($DEBUG=='debug')print('Invalid File Type for $favicon\n');
+        } else {
+          if($DEBUG=='debug')print('<b style="color:red;">Write-File</b> #INVALID_IMAGE#<br>');
+        }
+      } else {
+        $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.'.$fileExtension);
+        
+        // Write
+        $fh = @fopen($filePath, 'wb');
+        fwrite($fh, $content);
+        fclose($fh);
 
-      // FOR DEBUG ONLY
-    	if($DEBUG=='debug')print('<b style="color:red;">Write-File</b> #'.@$filePath.'#<br>');
+        // FOR DEBUG ONLY
+        if ($console_mode) {
+          if($DEBUG=='debug')print('Writing File $filepath\n');
+        } else {
+          if($DEBUG=='debug')print('<b style="color:red;">Write-File</b> #'.@$filePath.'#<br>');
+        }
+      }
 
     } else {
-      
+
       // Don't save Favicon local, only return Favicon URL
       $filePath = $favicon;
     }
@@ -239,10 +341,10 @@ function grap_favicon( $options=array() ) {
     } else {
       $content = file_get_contents($filePath);
     }
-	  print('<b style="color:red;">Image</b> <img style="width:32px;" 
+	  print('<b style="color:red;">Image</b> <img style="width:32px;"
 	         src="data:image/png;base64,'.base64_encode($content).'"><hr size="1">');
   }
-	
+
   // reset script runtime timeout
   set_time_limit($max_execution_time); // set it back to the old value
 
@@ -297,4 +399,20 @@ function rel2abs( $rel, $base ) {
 	$abs = preg_replace( "/(\/\.?\/)/", "/", $abs);
 	$abs = preg_replace( "/\/(?!\.\.)[^\/]+\/\.\.\//", "/", $abs);
 	return $scheme . '://' . $abs;
+}
+
+/* GET ICON IMAGE TYPE  */
+function geticonextension( $url ) {
+  $filetype = exif_imagetype($url);
+  $retval = null;
+  if ($filetype) {
+    if ($filetype == IMAGETYPE_GIF) { $retval = "gif"; }
+    if ($filetype == IMAGETYPE_JPEG) { $retval = "jpg"; }
+    if ($filetype == IMAGETYPE_PNG) { $retval = "png"; }
+    if ($filetype == IMAGETYPE_ICO) { $retval = "ico"; }
+    if ($filetype == IMAGETYPE_WEBP) { $retval = "webp"; }
+    if ($filetype == IMAGETYPE_BMP) { $retval = "bmp"; }
+    if ($filetype == IMAGETYPE_GIF) { $retval = "gif"; }
+  }
+  return $retval;
 }
