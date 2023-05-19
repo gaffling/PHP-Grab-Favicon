@@ -30,6 +30,17 @@ $grap_favicon = array(
 echo '<img src="'.grap_favicon($grap_favicon).'">';
 ```
 
+How To Use (Command Line)
+-------------------------
+
+**Usage:** '''get-fav.php''' _(Switches)_
+
+| Switch | Description | Notes |
+| ------ | ----------- | ----- |
+| --list | File or List of URLs | Example: --list=github.com,microsoft.com,www.google.com |
+
+
+
 Todo
 ----
 Optional split the download dir into several sub-dirs (MD5 segment of filename e.g. /af/cd/example.com.png) if there are a lot of favicons.
