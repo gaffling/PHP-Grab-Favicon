@@ -24,7 +24,7 @@ $grap_favicon = array(
 'SAVE'=> true,   // Save Favicon copy local (true) or return only favicon url (false)
 'DIR' => './',   // Local Dir the copy of the Favicon should be saved
 'TRY' => true,   // Try to get the Favicon frome the page (true) or only use the APIs (false)
-'DEV' => null,   // Give all Debug-Messages ('debug') or only make the work (null)
+'DEV' => false,   // Give all Debug-Messages (true) or only make the work (false)
 );
 
 echo '<img src="'.grap_favicon($grap_favicon).'">';
