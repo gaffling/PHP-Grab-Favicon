@@ -33,11 +33,14 @@ echo '<img src="'.grap_favicon($grap_favicon).'">';
 How To Use (Command Line)
 -------------------------
 
-**Usage:** '''get-fav.php''' _(Switches)_
+**Usage:** `get-fav.php` _(Switches)_
 
 | Switch | Description | Notes |
 | ------ | ----------- | ----- |
-| --list | File or List of URLs | Example: --list=github.com,microsoft.com,www.google.com |
+| `--list` | File or List of URLs | Example: `--list=github.com,microsoft.com,www.google.com` |
+| `--blocklist` | File or List of MD5 Hashes | |
+| `--path` | Location to store icons | Default is `./` |
+
 
 
 
