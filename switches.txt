@@ -1,0 +1,38 @@
+Complete List of Switches:
+
+Usage: get-fav.php (Switches)
+
+--list=FILE/LIST            Filename or a delimited list of URLs to check.
+--blocklist=FILE/LIST       Filename or a delimited list of MD5 hashes to block.
+--path=PATH                 Location to store icons (default is ./)
+
+--tryhomepage               Try homepage first, then APIs. (default is true)
+--onlyuseapis               Only use APIs.
+--disableapis               Don't use APIs.
+--enableblocklist           Enable blocklist. (default is true)
+--disableblocklist          Disable blocklist.
+--store                     Store favicons locally. (default is true)
+--nostore                   Do not store favicons locally.
+--overwrite                 Overwrite local favicons (default is false)
+--skip                      Skip local favicons if they are already present. (default is true)
+--consolemode               Force console output.
+--noconsolemode             Force HTML output.
+--debug                     Enable debug messages.
+
+API Control
+--enablefaviconkit          Enable FavIconKit API. (default)
+--enablefavicongrabber      Enable FavIconGrabber API. (default)
+--enablegoogle              Enable Google API. (default)
+--disablefaviconkit         Disable FavIconKit API.
+--disablefavicongrabber     Disable FavIconGrabber API.
+--disablegoogle             Disable Google API.
+
+Advanced:
+--nocurl                    Disable cURL
+--user-agent=AGENT_STRING   Customize the user agent.
+--curl-verbose              Enable cURL verbose.
+--curl-timeout=SECONDS      Set cURL timeout (default is 60).
+--connect-timeout=SECONDS   Set timeout for connections (default is 30).
+--dns-timeout=SECONDS       Set timeout for DNS lookups (default is 120 sseconds).
+
+Lists can be separated with space, comma or semi-colon.
