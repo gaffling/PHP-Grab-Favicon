@@ -67,8 +67,12 @@ https://github.com/audreyr/favicon-cheat-sheet
  
 $time_start = microtime(true);
 
+# Defines
+define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305191528');
+define('PROGRAM_VERSION', '202305191556');
+define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
+
 define('DEFAULT_ENABLE_APIS', true);
 define('DEFAULT_USE_CURL', true);
 define('DEFAULT_SAVE_LOCAL', true);
@@ -81,11 +85,12 @@ define('SUPPRESS_OUTPUT', "<NONE>");
 define('GOOGLE_DEFAULT_ICON_MD5', '3ca64f83fdcf25135d87e08af65e68c9');
 define('DEBUG_MESSAGE', 1);
 
+/* Init */
+$blockList = array();
 $apiList = array();
 $testURLs = array();
-$debug = null;
+$debug = false;
 $consoleMode = false;
-
 
 /* Defaults */
 $useCURL = DEFAULT_USE_CURL;
@@ -117,6 +122,7 @@ $shortopts  = "";
 $shortopts  = "l::";
 $shortopts  = "p::";
 $shortopts .= "h?";
+$shortopts .= "v";
 
 $longopts  = array(
   "list::",
@@ -149,6 +155,8 @@ $longopts  = array(
   "disablefavicongrabber",
   "debug",
   "help",
+  "version",
+  "ver",
 );
 
 # TO DO:
@@ -159,6 +167,13 @@ $longopts  = array(
 
 
 $options = getopt($shortopts, $longopts);
+
+if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['version'])))
+{
+  echo PROJECT_NAME . " (" . PROGRAM_NAME . ") v" . PROGRAM_VERSION ."\n";
+  echo PROGRAM_COPYRIGHT . "\n";
+  exit;
+}
 
 if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])))
 {
