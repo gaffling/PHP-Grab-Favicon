@@ -78,7 +78,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305221305');
+define('PROGRAM_VERSION', '202305221634');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
 
 define('DEFAULT_ENABLE_APIS', true);
@@ -86,6 +86,7 @@ define('DEFAULT_USE_CURL', true);
 define('DEFAULT_STORE', true);
 define('DEFAULT_TRY_HOMEPAGE', true);
 define('DEFAULT_OVERWRITE', false);
+define('DEFAULT_ENABLE_BLOCKLIST', true);
 define('DEFAULT_SIZE', 16);
 define('DEFAULT_LOCAL_PATH', "./");
 define('DEFAULT_HTTP_TIMEOUT', 60);
@@ -123,18 +124,6 @@ $debug = false;
 $consoleMode = false;
 
 /*
-**  Set Configuration Defaultsd
-*/
-$overWrite = DEFAULT_OVERWRITE;
-$localPath = DEFAULT_LOCAL_PATH;
-$saveLocal = DEFAULT_STORE;
-$tryHomepage = DEFAULT_TRY_HOMEPAGE;
-$enableAPIFavIconKit = DEFAULT_ENABLE_APIS;
-$enableAPIFavIconGrabber = DEFAULT_ENABLE_APIS;
-$enableAPIGoogle = DEFAULT_ENABLE_APIS;
-
-
-/*
 **  Determine Capabilities of PHP installation
 */
 
@@ -146,15 +135,20 @@ addCapability("php","get",function_exists('file_get_contents'));
 
 /* Set Configuration Defaults */
 
-setConfiguration("files","overwrite",DEFAULT_OVERWRITE);
-setConfiguration("files","local_path",DEFAULT_LOCAL_PATH);
-setConfiguration("files","store",DEFAULT_STORE);
-setConfiguration("http","try_homepage",DEFAULT_TRY_HOMEPAGE);
-setConfiguration("api","enable",DEFAULT_ENABLE_APIS);
-setConfiguration("http","default_useragent",DEFAULT_USER_AGENT);
-
-setConfiguration("api","enable",DEFAULT_ENABLE_APIS);
+setConfiguration("global","debug",false);
+setConfiguration("global","api",DEFAULT_ENABLE_APIS);
+setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
 setConfiguration("curl","enabled",getCapability("php","curl"));
+setConfiguration("curl","verbose",false);
+setConfiguration("curl","showprogress",false);
+setConfiguration("files","local_path",DEFAULT_LOCAL_PATH);
+setConfiguration("files","overwrite",DEFAULT_OVERWRITE);
+setConfiguration("files","store",DEFAULT_STORE);
+setConfiguration("http","default_useragent",DEFAULT_USER_AGENT);
+setConfiguration("http","dns_timeout",DEFAULT_DNS_TIMEOUT);
+setConfiguration("http","http_timeout",DEFAULT_HTTP_TIMEOUT);
+setConfiguration("http","http_timeout_connect",DEFAULT_HTTP_CONNECT_TIMEOUT);
+setConfiguration("http","try_homepage",DEFAULT_TRY_HOMEPAGE);
 setConfiguration("mode","console",getCapability("php","console"));
 
 /* Modify Configuration Depending on Other Options */
@@ -255,9 +249,6 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
 /* 
 **  Command Line Options
 **
-*/
-
-/*
 **  Aliased Options
 */
 
@@ -271,34 +262,53 @@ if (isset($options['save'])) { $options['store'] = $options['save']; }
 if (isset($options['nosave'])) { $options['nostore'] = $options['nosave']; } 
 if (isset($options['skip'])) { $options['nooverwrite'] = $options['skip']; } 
 
+
 /*
-**   Process Command Line Switches and Defaults
+**  Load Configuration File
 */
 
-setConfiguration("global","debug",$options['debug'],false,CONFIG_TYPE_SWITCH);
-setConfiguration("mode","console",$options['consolemode'],$options['noconsolemode'],CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("files","local_path",$options['path'],DEFAULT_LOCAL_PATH,CONFIG_TYPE_PATH);
-setConfiguration("files","store",$options['store'],$options['nostore'],CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("files","overwrite",$options['overwrite'],$options['nooverwrite'],CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("http","try_homepage",$options['tryhomepage'],$options['onlyuseapis'],CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("http","useragent",$options['user-agent'],null,CONFIG_TYPE_USERAGENT);
-setConfiguration("http","http_timeout",setRange($options['http-timeout'],RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM),DEFAULT_HTTP_TIMEOUT);
-setConfiguration("http","http_timeout_connect",setRange($options['connect-timeout'],RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM),DEFAULT_HTTP_CONNECT_TIMEOUT);
-setConfiguration("http","dns_timeout",setRange($options['dns-timeout'],RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM),DEFAULT_DNS_TIMEOUT);
-setConfiguration("curl","verbose",$options['curl-verbose'],false,CONFIG_TYPE_SWITCH);
-setConfiguration("curl","showprogress",$options['curl-showprogress'],false,CONFIG_TYPE_SWITCH);
+if (isset($options['configfile'])) {
+  if (!is_null($options['configfile'])) {
+    if (file_exists($options['configfile'])) {
+      $configuration_from_file = parse_ini_file($options['configfile'],true,INI_SCANNER_RAW);
+      $configuration = array_replace_recursive($configuration, $configuration_from_file);
+      unset($configuration_from_file);
+      validateConfiguration();
+    }
+  }
+}
+
+/*
+**   Process Command Line Switches
+*/
+ 
+setConfiguration("global","debug",(isset($options['debug']))?$options['debug']:null,null,CONFIG_TYPE_SWITCH);
+setConfiguration("global","blocklist",(isset($options['enableblocklist']))?$options['enableblocklist']:null,(isset($options['disableblocklist']))?$options['disableblocklist']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("mode","console",(isset($options['consolemode']))?$options['consolemode']:null,(isset($options['noconsolemode']))?$options['noconsolemode']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("files","local_path",(isset($options['path']))?$options['path']:null,null,CONFIG_TYPE_PATH);
+setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("http","try_homepage",(isset($options['tryhomepage']))?$options['tryhomepage']:null,(isset($options['onlyuseapis']))?$options['onlyuseapis']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("http","useragent",(isset($options['user-agent']))?$options['user-agent']:null,null,CONFIG_TYPE_USERAGENT);
+setConfiguration("http","http_timeout",(isset($options['http-timeout']))?$options['http-timeout']:null);
+setConfiguration("http","http_timeout_connect",(isset($options['connect-timeout']))?$options['connect-timeout']:null);
+setConfiguration("http","dns_timeout",(isset($options['dns-timeout']))?$options['dns-timeout']:null);
+setConfiguration("curl","verbose",(isset($options['curl-verbose']))?$options['curl-verbose']:null,null,CONFIG_TYPE_SWITCH);
+setConfiguration("curl","showprogress",(isset($options['curl-showprogress']))?$options['curl-showprogress']:null,null,CONFIG_TYPE_SWITCH);
 
 if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
+if (isset($options['disableallapis'])) { setConfiguration("global","api",false); }
+
+validateConfiguration();
 
 /*  
 **  Process Lists
 */
 
-$URLList = loadList($options['list']);
-$blockList = loadList($options['blocklist']);
-$enabledAPIList = loadList($options['enableapis']);
-$disabledAPIList = loadList($options['disableapis']);
-
+$URLList = loadList((isset($options['list']))?$options['list']:null);
+$blockList = loadList((isset($options['blocklist']))?$options['blocklist']:null);
+$enabledAPIList = loadList((isset($options['enableapis']))?$options['enableapis']:null);
+$disabledAPIList = loadList((isset($options['disableapis']))?$options['disableapis']:null);
 
 /*
 **  Create Blocklist
@@ -308,19 +318,6 @@ $blockList = array(
   'd0fefd1fde1699e90e96a5038457b061',
 );
 
-
-# TO DO
-# populate opt_config_pathname
-# and do something with config_data
-if (!is_null($opt_config_pathname))
-{
-  if (file_exists($opt_config_pathname))
-  {
-    $config_data = parse_ini_file($opt_config_pathname,true,INI_SCANNER_RAW);
-  } else {
-    $config_data = array();
-  }
-}
 
 $flag_enabled = true;
 
@@ -333,6 +330,7 @@ addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,$flag_
 
 # TO DO:
 #   Go through APIs and enable/disable individually
+
 
 /* If test URLs is empty, setup testing list */
 if (empty($URLList)) {
@@ -398,6 +396,8 @@ function grap_favicon($url) {
   $api_url = null;
   $api_json = false;
   $api_enabled = false;
+  
+  $filePath = null;
 
   if (!$consoleMode) {
     // avoid script runtime timeout
@@ -425,7 +425,7 @@ function grap_favicon($url) {
   writeOutput("Domain: $domain","<b style=".HTML_WARNING_STYLE.">Domain</b> #".@$domain."#<br>",DEBUG_MESSAGE);
 
   // If $trySelf == TRUE ONLY USE APIs
-  if (isset($trySelf) && $trySelf == TRUE) {
+  if (isset($trySelf) && $trySelf == true) {
 
     // Load Page
     $html = load($url);
@@ -482,8 +482,7 @@ function grap_favicon($url) {
     {
       writeOutput("Selecting API",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       $selectAPI = getRandomAPI();
-      if (isset($selectAPI['name']))
-      {
+      if (isset($selectAPI['name'])) {
         $api_name = $selectAPI['name'];
         $api_url = $selectAPI['url'];
         $api_json = $selectAPI['json'];
@@ -494,15 +493,16 @@ function grap_favicon($url) {
         {
           writeOutput("Using API: $api_name",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
           $favicon = getAPIurl($api_url,$domain,DEFAULT_SIZE);
-          if ($api_json)
-          {
-            $echo = json_decode(load($favicon),TRUE);
-            $favicon = $echo;
-            if (!empty($api_json_structure)) {
-              foreach ($api_json_structure as $element) {
-                $favicon = $favicon[$element];
-              }
-            }          
+          if ($api_json) {
+            $echo = json_decode(load($favicon),true);
+            if (!is_null($echo)) {
+              $favicon = $echo;
+              if (!empty($api_json_structure)) {
+                foreach ($api_json_structure as $element) {
+                  $favicon = $favicon[$element];
+                }
+              }  
+            }            
           }
           writeOutput("$api_name API Result: '$favicon'","<b style=".HTML_WARNING_STYLE.">$api_name API Result</b> #".@$favicon."#<br>",DEBUG_MESSAGE);
         } else {
@@ -577,7 +577,7 @@ function grap_favicon($url) {
 	if ($debug) {
     // Load the Favicon from local file
     if (!empty($filePath)) {
-      if (!function_exists('file_get_contents')) {
+      if (!getCapability("php","get")) {
         $fh = @fopen($filePath, 'r');
         if ($fh) {
           while (!feof($fh)) {
@@ -611,12 +611,11 @@ function grap_favicon($url) {
 function load($url) {
   $previous_url = null;
   setGlobal('redirect_url',null);
-  
   if (getConfiguration("curl","enabled")) {
     // cURL Method
     writeOutput("cURL: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),"<b style=".HTML_WARNING_STYLE.">cURL</b> #Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout") . "#<br>",DEBUG_MESSAGE);
     $ch = curl_init($url);
-    if (!is_null($userAgent)) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
+    if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
     curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
     curl_setopt($ch, CURLOPT_TIMEOUT, getConfiguration("http","http_timeout"));
     curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, getConfiguration("http","http_timeout_connect")); 
@@ -653,7 +652,7 @@ function load($url) {
     $context = stream_context_create($context_options);
 	  if (!getCapability("php","get")) {
       //  Fallback if file_get_contents is not available
-      $fh = fopen($url, 'r', FALSE, $context);
+      $fh = fopen($url, 'r', false, $context);
       if ($fh) {
         $content = '';
         while (!feof($fh)) {
@@ -665,7 +664,7 @@ function load($url) {
         # error getting handle
       }
     } else {
-      $content = file_get_contents($url, NULL, $context);
+      $content = file_get_contents($url, null, $context);
     }
   }
   return $content;
@@ -757,7 +756,7 @@ function setBoolean($value)
   } elseif (is_numeric($value)) {
     if ($value > 0) { $retval = true; }
   } elseif (is_string($value)) {
-    if ((strtolower($value) == "true") || (strtolower($value) == "yes") || (strtolower($value) == "enabled") || (strtolower($value) == "enable")) {
+    if ((strtolower($value) == "true") || (strtolower($value) == "yes") || (strtolower($value) == "enabled") || (strtolower($value) == "enable") || (strtolower($value) == "on")) {
       $retval = true;
     }
   } else {
@@ -768,13 +767,15 @@ function setBoolean($value)
   return $retval;
 }
 
-function setRange($value,$min = 0,$max = 0)
+function setRange($value,$min = null,$max = null)
 {
   if (is_numeric($value))
   {
-    if ($min != 0) { if ($value < $min) { $value = $min; } }
-    if ($max != 0) { if ($value > $max) { $value = $max; } }
+    if (!is_null($min)) { if ($value < $min) { $value = $min; } }
+    if (!is_null($max)) { if ($value > $max) { $value = $max; } }
   }
+  
+  $value = intval($value);
   
   return $value;
 }
@@ -925,57 +926,61 @@ function setConfiguration($scope = "global",$option,$value = null,$default = nul
   global $configuration;
   $flag_fallback = true;
   $flag_handled = false;
-
-  switch ($type) {
-    case CONFIG_TYPE_PATH:            /* Validate Path */
-      if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
-      break;
-    case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
-      if (is_bool($value)) { $flag_fallback = false; }
-      break;
-    case CONFIG_TYPE_STRING:          /* Validate String */
-      if (is_string($value)) { $flag_fallback = false; }
-      break;
-    case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
-      if (is_numeric($value)) { $flag_fallback = false; }
-      break;
-    case CONFIG_TYPE_SWITCH:          /* Validate Switch */
-      if (isset($value)) {
-        $flag_fallback = false;
-        $value = true;
-      }
-      break;
-    case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
-      $flag_handled = true;
-      if (isset($value)) {
-        $flag_handled = true;
-        $configuration[$scope][$option] = true;
-      }
-      if (isset($default)) {
-        $flag_handled = true;
-        $configuration[$scope][$option] = false;
-      }
-      break;
-    case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
-      if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
-      if (isset($value)) {
-        if (!is_null($value)) {
+  
+  if (isset($value))
+  {
+    switch ($type) {
+      case CONFIG_TYPE_PATH:            /* Validate Path */
+        if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
+        break;
+      case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+        if (is_bool($value)) { $flag_fallback = false; }
+        break;
+      case CONFIG_TYPE_STRING:          /* Validate String */
+        if (is_string($value)) { $flag_fallback = false; }
+        break;
+      case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+        if (is_numeric($value)) { $flag_fallback = false; }
+        break;
+      case CONFIG_TYPE_SWITCH:          /* Validate Switch */
+        if (isset($value)) {
           $flag_fallback = false;
-          if (strtolower($value) == "none") {
-            $value = null;
+          $value = true;
+        }
+        break;
+      case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
+        $flag_handled = true;
+        if (isset($value)) {
+          $flag_handled = true;
+          $configuration[$scope][$option] = true;
+        }
+        if (isset($default)) {
+          $flag_handled = true;
+          $configuration[$scope][$option] = false;
+        }
+        break;
+      case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
+        if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
+        if (isset($value)) {
+          if (!is_null($value)) {
+            $flag_fallback = false;
+            if (strtolower($value) == "none") {
+              $value = null;
+            }
           }
         }
-      }
-      break;
-    default:                          /* Just see if it's set */
-      if (isset($value)) { $flag_fallback = false; }
-      break;
+        break;
+      default:                          /* Just see if it's set */
+        if (isset($value)) { $flag_fallback = false; }
+        break;
+    }
   }
-    
+      
   if (!$flag_handled) {
     if ($flag_fallback) { $value = $default; }
-    $configuration[$scope][$option] = $value;
+    if (isset($value)) { $configuration[$scope][$option] = $value; }
   }
+  
 }
 
 function getConfiguration($scope = "global",$option)
@@ -985,6 +990,45 @@ function getConfiguration($scope = "global",$option)
   if (isset($configuration[$scope][$option])) { $value = $configuration[$scope][$option]; } else { $value = null; }
   
   return $value;
+}
+
+function validateConfigurationSetting($scope = "global",$option,$type = 0,$min = 0,$max = 0)
+{
+  global $configuration;
+  
+  if (isset($configuration[$scope][$option])) {
+    $value = $configuration[$scope][$option];
+    switch ($type) {
+      case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+        $value = setRange($value,$min,$max);
+        if (is_numeric($value)) { $configuration[$scope][$option] = $value; }
+        break;
+      case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+        if (!is_bool($value)) {
+          $value = setBoolean($value);
+          if (is_bool($value)) { $configuration[$scope][$option] = $value; }
+        } 
+        break;
+    }
+  }
+}
+
+function validateConfiguration()
+{
+  # Ensure that booleans are properly typed
+  # Ensure numerics are numeric and in proper ranges
+  
+  validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("http","try_homepage",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
+  validateConfigurationSetting("http","http_timeout",CONFIG_TYPE_NUMERIC,RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","http_timeout_connect",CONFIG_TYPE_NUMERIC,RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
 }
 
 /*
