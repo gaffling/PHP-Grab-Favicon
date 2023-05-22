@@ -9,15 +9,24 @@ Changelog:
   added dns timeout
   changed $debug to a boolean
   unified output to a single function for both console and html
+  moved to a configuration array/structure
+  simplified grap_favicon function, only the url is passed in, the other options are read from the configuration structure
 
 TO DO:
   read config file
+    will look in current dir
+    can specify with -c=path, --config=path (or --configuration)
+    should just general configuration be in an array instead of individual globals?
   blocklist of icons (for example if the apis return archive.org's icon)
     list of md5 hashes
     skipped if blocklist is empty or option is goven
     --blocklist=(list of hashes or file with hashes)
     --enableblocklist
     --disableblocklist
+  optional query string/form support for options
+    default will be disabled for security reasons
+  use new structures for configuration/capabiltiies
+  
   
 PHP Grab Favicon
 ================
@@ -41,15 +50,6 @@ How to Use
 ```PHP
 $url = 'example.com';
 
-$grap_favicon = array(
-'URL' => $url,   // URL of the Page we like to get the Favicon from
-'SAVE'=> true,   // Save Favicon copy local (true) or return only favicon url (false)
-'DIR' => './',   // Local Dir the copy of the Favicon should be saved
-'TRY' => true,   // Try to get the Favicon frome the page (true) or only use the APIs (false)
-'OVR' => false,  // Skip if file is already local (false) or overwrite (true)
-'DEV' => null,   // Give all Debug-Messages ('debug') or only make the work (null)
-);
-
 echo '<img src="'.grap_favicon($grap_favicon).'">';
 ```
 
@@ -67,74 +67,128 @@ https://github.com/audreyr/favicon-cheat-sheet
  
 $time_start = microtime(true);
 
-# Defines
+/*
+**  If you wish get-fav.php to be able to process commands issued via a query string or
+**  form submission on a webserver, change the setting below to true.
+*/
+define('ENABLE_WEB_INPUT', false);
+
+/*
+**  Set Defaults
+*/
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305191556');
+define('PROGRAM_VERSION', '202305221223');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
 
 define('DEFAULT_ENABLE_APIS', true);
 define('DEFAULT_USE_CURL', true);
-define('DEFAULT_SAVE_LOCAL', true);
+define('DEFAULT_STORE', true);
 define('DEFAULT_TRY_HOMEPAGE', true);
 define('DEFAULT_OVERWRITE', false);
 define('DEFAULT_SIZE', 16);
 define('DEFAULT_LOCAL_PATH', "./");
+define('DEFAULT_HTTP_TIMEOUT', 60);
+define('DEFAULT_HTTP_CONNECT_TIMEOUT', 30);
+define('DEFAULT_DNS_TIMEOUT', 120);
+define('DEFAULT_USER_AGENT', "FaviconBot/1.0/");
+define('RANGE_HTTP_TIMEOUT_MINIMUM', 0);
+define('RANGE_HTTP_TIMEOUT_MAXIMUM', 600);
+define('RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM', 0);
+define('RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM', 600);
+define('RANGE_DNS_TIMEOUT_MINIMUM', 0);
+define('RANGE_DNS_TIMEOUT_MAXIMUM', 600);
+define('BUFFER_SIZE', 128);
 define('HTML_WARNING_STYLE', ".HTML_WARNING_STYLE.");
 define('SUPPRESS_OUTPUT', "<NONE>");
 define('GOOGLE_DEFAULT_ICON_MD5', '3ca64f83fdcf25135d87e08af65e68c9');
 define('DEBUG_MESSAGE', 1);
+define('CONFIG_TYPE_STRING', 1);
+define('CONFIG_TYPE_BOOLEAN', 2);
+define('CONFIG_TYPE_NUMERIC', 3);
+define('CONFIG_TYPE_PATH', 4);
+define('CONFIG_TYPE_SWITCH', 5);
+define('CONFIG_TYPE_SWITCH_PAIR', 6);
+define('CONFIG_TYPE_USERAGENT', 7);
 
-/* Init */
+/*
+**  Initialize Arrays and Flags
+*/
 $blockList = array();
+$URLList = array();
 $apiList = array();
-$testURLs = array();
+$configuration = array();
+$capabilities = array();
 $debug = false;
 $consoleMode = false;
 
-/* Defaults */
-$useCURL = DEFAULT_USE_CURL;
+/*
+**  Set Configuration Defaultsd
+*/
 $overWrite = DEFAULT_OVERWRITE;
 $localPath = DEFAULT_LOCAL_PATH;
-$saveLocal = DEFAULT_SAVE_LOCAL;
+$saveLocal = DEFAULT_STORE;
 $tryHomepage = DEFAULT_TRY_HOMEPAGE;
 $enableAPIFavIconKit = DEFAULT_ENABLE_APIS;
 $enableAPIFavIconGrabber = DEFAULT_ENABLE_APIS;
 $enableAPIGoogle = DEFAULT_ENABLE_APIS;
 
-/* Fall back if CURL is not available */
-if (!function_exists('curl_version')) { $useCURL = false; }
 
-/* Blocked Icon List */
-$blockList = array(
-  '3ca64f83fdcf25135d87e08af65e68c9',
-  'd0fefd1fde1699e90e96a5038457b061',
-);
+/*
+**  Determine Capabilities of PHP installation
+*/
 
-/* Detect Console Mode, can be overridden with switches */
+addCapability("php","console",(php_sapi_name() == "cli"));
+addCapability("php","curl",function_exists('curl_version'));
+addCapability("php","exif",function_exists('exif_imagetype'));
+addCapability("php","get",function_exists('file_get_contents'));
 
-if (php_sapi_name() == "cli") { $consoleMode = true; }
 
-if ($consoleMode) { $script_name = basename(__FILE__); } else { $script_name = basename($_SERVER['PHP_SELF']); }
+/* Set Configuration Defaults */
+
+setConfiguration("files","overwrite",DEFAULT_OVERWRITE);
+setConfiguration("files","local_path",DEFAULT_LOCAL_PATH);
+setConfiguration("files","store",DEFAULT_STORE);
+setConfiguration("http","try_homepage",DEFAULT_TRY_HOMEPAGE);
+setConfiguration("api","enable",DEFAULT_ENABLE_APIS);
+setConfiguration("http","default_useragent",DEFAULT_USER_AGENT);
+
+setConfiguration("api","enable",DEFAULT_ENABLE_APIS);
+setConfiguration("curl","enabled",getCapability("php","curl"));
+setConfiguration("mode","console",getCapability("php","console"));
+
+/* Modify Configuration Depending on Other Options */
+if (isset($_SERVER['SERVER_NAME'])) { setConfiguration("http","default_useragent",DEFAULT_USER_AGENT . " (+http://". $_SERVER['SERVER_NAME'] ."/)"); }
+if (!DEFAULT_USE_CURL) { setConfiguration("curl","enabled",false); }
+
+if (getConfiguration("mode","console")) { $script_name = basename(__FILE__); } else { $script_name = basename($_SERVER['PHP_SELF']); }
+
 
 /* Command Line Options */
 $shortopts  = "";
+$shortopts  = "b::";
 $shortopts  = "l::";
 $shortopts  = "p::";
+$shortopts  = "c::";
 $shortopts .= "h?";
 $shortopts .= "v";
 
 $longopts  = array(
   "list::",
+  "blocklist::",
   "path::",
+  "config::",
+  "configfile::",
   "user-agent::",
   "curl-timeout::",
   "http-timeout::",
   "connect-timeout::",
   "dns-timeout::",
+  "enableapis::",
+  "disableapis::",
   "tryhomepage",
   "onlyuseapis",
-  "disableapis",
+  "disableallapis",
   "enableblocklist",
   "disableblocklist",
   "store",
@@ -142,17 +196,12 @@ $longopts  = array(
   "save",
   "nosave",
   "overwrite",
+  "nooverwrite",
   "skip",
   "nocurl",
   "curl-verbose",
   "consolemode",
   "noconsolemode",
-  "enablefaviconkit",
-  "enablefavicongrabber",
-  "enablegoogle",  
-  "disablegoogle",
-  "disablefaviconkit",
-  "disablefavicongrabber",
   "debug",
   "help",
   "version",
@@ -180,7 +229,7 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "Usage: $script_name (Switches)\n\n";
   echo "--list=FILE/LIST            Filename or a delimited list of URLs to check.\n";
   echo "--blocklist=FILE/LIST       Filename or a delimited list of MD5 hashes to block.\n";
-  echo "--path=PATH                 Location to store icons (default is $localPath)\n";
+  echo "--path=PATH                 Location to store icons (default is " . DEFAULT_LOCAL_PATH . ")\n";
   echo "\n";
   echo "--tryhomepage               Try homepage first, then APIs. (default is true)\n";
   echo "--onlyuseapis               Only use APIs.\n";
@@ -203,121 +252,92 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   exit;
 }
 
-/* Initialize */
+/* 
+**  Command Line Options
+**
+*/
 
-$curl_verbose = null;
-$curl_enabled = null;
-$dns_timeout = null;
-$http_useragent = null;
-$http_timeout = null;
-$http_timeout_connect = null;
+/*
+**  Aliased Options
+*/
 
-/* Process Options */
+if (isset($options['curl-timeout'])) { $options['http-timeout'] = $options['curl-timeout']; }
+if (isset($options['p'])) { $options['path'] = $options['p']; } 
+if (isset($options['l'])) { $options['list'] = $options['l']; }
+if (isset($options['b'])) { $options['blocklist'] = $options['b']; }
+if (isset($options['config'])) { $options['configfile'] = $options['config']; }
+if (isset($options['c'])) { $options['configfile'] = $options['c']; }
+if (isset($options['save'])) { $options['store'] = $options['save']; } 
+if (isset($options['nosave'])) { $options['nostore'] = $options['nosave']; } 
+if (isset($options['skip'])) { $options['nooverwrite'] = $options['skip']; } 
 
-$opt_list = null;
-$opt_localpath = null;
-$opt_usestdin = null;
-$opt_tryhomepage = null;
-$opt_storelocal = null;
-$opt_debug = null;
-$opt_console = null;
-$opt_timeout = null;
-$opt_timeout_connect = null;
-$opt_timeout_dns = null;
-$opt_http_user_agent = null;
-$opt_curl_verbose = false;
-$opt_http_timeout = null;
-$opt_http_timeout_connect = null;
-$opt_dns_timeout = null;
-$opt_use_faviconkit = null;
-$opt_use_favicongrabber = null;
-$opt_use_google = null;
-$opt_nocurl = null;
+/*
+**   Process Command Line Switches and Defaults
+*/
+
+setConfiguration("global","debug",$options['debug'],false,CONFIG_TYPE_SWITCH);
+setConfiguration("mode","console",$options['consolemode'],$options['noconsolemode'],CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("files","local_path",$options['path'],DEFAULT_LOCAL_PATH,CONFIG_TYPE_PATH);
+setConfiguration("files","store",$options['store'],$options['nostore'],CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("files","overwrite",$options['overwrite'],$options['nooverwrite'],CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("http","try_homepage",$options['tryhomepage'],$options['onlyuseapis'],CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("http","useragent",$options['user-agent'],null,CONFIG_TYPE_USERAGENT);
+setConfiguration("http","http_timeout",setRange($options['http-timeout'],RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM),DEFAULT_HTTP_TIMEOUT);
+setConfiguration("http","http_timeout_connect",setRange($options['connect-timeout'],RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM),DEFAULT_HTTP_CONNECT_TIMEOUT);
+setConfiguration("http","dns_timeout",setRange($options['dns-timeout'],RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM),DEFAULT_DNS_TIMEOUT);
+setConfiguration("curl","verbose",$options['curl-verbose'],false,CONFIG_TYPE_SWITCH);
+setConfiguration("curl","showprogress",$options['curl-showprogress'],false,CONFIG_TYPE_SWITCH);
+
+if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
 
 
-if (isset($options['debug'])) { $opt_debug = true; }
-if (isset($options['list'])) { $opt_list = $options['list']; }
-if (isset($options['blocklist'])) { $opt_blocklist = $options['blocklist']; }
-if (isset($options['path'])) { $opt_localpath = $options['path']; }
-if (isset($options['l'])) { $opt_list = $options['l']; }
-if (isset($options['p'])) { $opt_localpath = $options['p']; }
-if (isset($options['consolemode'])) { $opt_console = true; }
-if (isset($options['store'])) { $opt_storelocal = true; }
-if (isset($options['save'])) { $opt_storelocal = true; }
-if (isset($options['skip'])) { $overWrite = false; }
-if (isset($options['tryhomepage'])) { $opt_tryhomepage = true; }
-if (isset($options['nostore'])) { $opt_storelocal = false; }
-if (isset($options['nosave'])) { $opt_storelocal = false; }
-if (isset($options['onlyuseapis'])) { $opt_tryhomepage = false; }
-if (isset($options['noconsolemode'])) { $opt_console = false; }
-if (isset($options['overwrite'])) { $overWrite = true; }
-if (isset($options['user-agent'])) { $opt_http_user_agent = $options['user-agent']; }
-if (isset($options['curl-verbose'])) { $opt_curl_verbose = true; }
-if (isset($options['curl-timeout'])) { $opt_http_timeout = $options['curl-timeout']; }
-if (isset($options['http-timeout'])) { $opt_http_timeout = $options['http-timeout']; }
-if (isset($options['connect-timeout'])) { $opt_http_timeout_connect = $options['connect-timeout']; }
-if (isset($options['dns-timeout'])) { $opt_dns_timeout = $options['dns-timeout']; }
-if (isset($options['nocurl'])) { $opt_nocurl = $options['nocurl']; }
+/*  
+**  Process Lists
+*/
 
-if (isset($options['enablefaviconkit'])) { $enableAPIFavIconKit = true; }
-if (isset($options['enablefavicongrabber'])) { $enableAPIFavIconGrabber = true; }
-if (isset($options['enablegoogle'])) { $enableAPIGoogle = true; }
-if (isset($options['disablefaviconkit'])) { $enableAPIFavIconKit = false; }
-if (isset($options['disablefavicongrabber'])) { $enableAPIFavIconGrabber = false; }
-if (isset($options['disablegoogle'])) { $enableAPIGoogle = false; }
-if (isset($options['disableapis'])) {
-  $enableAPIFavIconKit = false;
-  $enableAPIFavIconGrabber = false;
-  $enableAPIGoogle = false;
-}
+$URLList = loadList($options['list']);
+$blockList = loadList($options['blocklist']);
+$enabledAPIList = loadList($options['enableapis']);
+$disabledAPIList = loadList($options['disableapis']);
 
-if (!is_null($opt_localpath)) { if (file_exists($opt_localpath)) { $localPath = $opt_localpath; } }
-if (!is_null($opt_tryhomepage)) { $tryHomepage = $opt_tryhomepage; }
-if (!is_null($opt_storelocal)) { $saveLocal = $opt_storelocal; }
-if (!is_null($opt_debug)) { if ($opt_debug) { $debug = true; } else { $debug = false; } }
-if (!is_null($opt_console)) { $consoleMode = $opt_console; }
-if (!is_null($opt_http_timeout)) { if (is_numeric($opt_http_timeout)) { if ($opt_http_timeout >= 0 && $opt_http_timeout < 600) { $opt_timeout = $opt_http_timeout; } } }
-if (!is_null($opt_http_timeout_connect)) { if (is_numeric($opt_http_timeout_connect)) { if ($opt_http_timeout_connect >= 0 && $opt_http_timeout_connect < 600) { $opt_timeout_connect = $opt_http_timeout_connect; } } }
-if (!is_null($opt_dns_timeout)) { if (is_numeric($opt_dns_timeout)) { if ($opt_dns_timeout >= 0 && $opt_dns_timeout < 600) { $opt_timeout_dns = $opt_dns_timeout; } } }
-if (!is_null($opt_nocurl)) { $useCURL = false; }
 
-if ($useCURL) { setGlobal('curl_enabled', 1); } else { setGlobal('curl_enabled', 0); }
+/*
+**  Create Blocklist
+*/
+$blockList = array(
+  '3ca64f83fdcf25135d87e08af65e68c9',
+  'd0fefd1fde1699e90e96a5038457b061',
+);
 
-if (isset($opt_list)) {
-  if (file_exists($opt_list)) {
-    $testURLs = file($opt_list,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+# TO DO
+# populate opt_config_pathname
+# and do something with config_data
+if (!is_null($opt_config_pathname))
+{
+  if (file_exists($opt_config_pathname))
+  {
+    $config_data = parse_ini_file($opt_config_pathname,true,INI_SCANNER_RAW);
   } else {
-    if (count($testURLs) == 0) {
-      $testURLs = explode(",",str_replace(array(",",";"," "),",",$opt_list));
-    }
+    $config_data = array();
   }
 }
 
-if (isset($opt_blocklist)) {
-  if (file_exists($opt_blocklist)) {
-    $blockList = file($opt_blocklist,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-  } else {
-    if (count($blockList) == 0) {
-      $blockList = explode(",",str_replace(array(",",";"," "),",",$opt_blocklist));
-    }
-  }
-}
+$flag_enabled = true;
 
-if (is_null($opt_http_user_agent)) { if (isset($_SERVER['SERVER_NAME'])) { $opt_http_user_agent = 'FaviconBot/1.0 (+http://'.$_SERVER['SERVER_NAME'].'/'; } else { $opt_http_user_agent = 'FaviconBot/1.0/'; } }
-if (strtolower($opt_http_user_agent) != "none") { setGlobal('http_useragent', $opt_http_user_agent); }
-setGlobal('curl_verbose', $opt_curl_verbose);
-if (!is_null($opt_timeout)) { setGlobal('http_timeout', $opt_timeout); }
-if (!is_null($opt_timeout_connect)) { setGlobal('http_timeout_connect', $opt_timeout_connect); }
-if (!is_null($opt_timeout_dns)) { setGlobal('dns_timeout', $opt_timeout_dns); }
+if (isset($options['disableallapis'])) { $flag_enabled = false; }
 
 /* Initialize APIs */
-addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,$enableAPIFavIconKit);
-addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,$enableAPIFavIconGrabber,array("icons","0","src"));
-addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,$enableAPIGoogle);
+addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,$flag_enabled);
+addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,$flag_enabled,array("icons","0","src"));
+addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,$flag_enabled);
+
+# TO DO:
+#   Go through APIs and enable/disable individually
 
 /* If test URLs is empty, setup testing list */
-if (count($testURLs) == 0) {
-  $testURLs = array(
+if (empty($URLList)) {
+  $URLList = array(
     'http://aws.amazon.com',
     'http://www.apple.com',
     'http://www.dribbble.com',
@@ -346,16 +366,8 @@ initializeUserAgent();
 writeOutput("Debug ON",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
 
 /*  Process List */
-foreach ($testURLs as $url) {
-  $grap_favicon = array(
-    'URL' => $url,          // URL of the Page we like to get the Favicon from
-    'SAVE'=> $saveLocal,    // Save Favicon copy local (true) or return only favicon url (false)
-    'DIR' => $localPath,    // Local Dir the copy of the Favicon should be saved
-    'TRY' => $tryHomepage,  // Try to get the Favicon frome the page (true) or only use the APIs (false)
-    'OVR' => $overWrite,    // Overwrite existing local files or skip
-    'DEV' => $debug,        // Give all Debug-Messages ('debug') or only make the work (null)
-  );
-  $favicons[] = grap_favicon($grap_favicon, $consoleMode);
+foreach ($URLList as $url) {
+  $favicons[] = grap_favicon($url);
 }
 
 /*  Show Results */
@@ -370,28 +382,28 @@ writeOutput("\nRuntime: ".round(microtime(true)-$time_start,2)." Sec.","<br><br>
 /*****************************************************
                 FUNCTIONS
 *****************************************************/
-function grap_favicon($options=array(), $consoleMode = false) {
-  if (!$consoleMode) {
-    // avoid script runtime timeout
-    $max_execution_time = ini_get("max_execution_time");
-    set_time_limit(0); // 0 = no timelimit
-  }
+function grap_favicon($url) {
+  // URL to lower case
+	$url          = strtolower($url);
+  
+  //  Init Vars
+  $consoleMode  = getConfiguration("mode","console");
+  $save         = getConfiguration("files","store");
+  $directory    = getConfiguration("files","local_path");
+  $trySelf      = getConfiguration("http","try_homepage");
+  $debug        = getConfiguration("global","debug");
+  $overwrite    = getConfiguration("files","overwrite");
 
   $api_name = null;
   $api_url = null;
   $api_json = false;
   $api_enabled = false;
-  
-  // Ini Vars
-  $url       = (isset($options['URL']))?$options['URL']:'gaffling.com';
-  $save      = (isset($options['SAVE']))?$options['SAVE']:true;
-  $directory = (isset($options['DIR']))?$options['DIR']:'./';
-  $trySelf   = (isset($options['TRY']))?$options['TRY']:true;
-  $debug     = (isset($options['DEV']))?$options['DEV']:false;
-  $overwrite = (isset($options['OVR']))?$options['OVR']:false;
 
-  // URL to lower case
-	$url = strtolower($url);
+  if (!$consoleMode) {
+    // avoid script runtime timeout
+    $max_execution_time = ini_get("max_execution_time");
+    set_time_limit(0); // 0 = no timelimit
+  }
 
 	// Get the Domain from the URL
   $domain = parse_url($url, PHP_URL_HOST);
@@ -508,13 +520,13 @@ function grap_favicon($options=array(), $consoleMode = false) {
   // If Favicon should be saved
   if ((isset($save)) && ($save == TRUE)) {
     unset($content);
-    writeLog("Attempting to load favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+    writeOutput("Attempting to load favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
 
     //  Load Favicon
     $content = load($favicon);
     
     if (empty($content)) {
-      writeLog("Failed to load favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeOutput("Failed to load favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
     } else {
       if (!is_null(getGlobal('redirect_url'))) { $favicon = getGlobal('redirect_url'); }
       if (!is_null($api_name)) {
@@ -543,9 +555,15 @@ function grap_favicon($options=array(), $consoleMode = false) {
           } else {
             // Write
             $fh = @fopen($filePath, 'wb');
-            fwrite($fh, $content);
-            fclose($fh);
-            writeOutput("Writing File $filePath","<b style=".HTML_WARNING_STYLE.">Write-File</b> #".@$filePath."#<br>",DEBUG_MESSAGE);
+            if ($fh) {
+              fwrite($fh, $content);
+              fclose($fh);
+              writeOutput("Writing File $filePath","<b style=".HTML_WARNING_STYLE.">Write-File</b> #".@$filePath."#<br>",DEBUG_MESSAGE);
+            } else {
+              # TO DO:
+              # Error getting handle
+              writeOutput("Error Writing File $filePath","<b style=".HTML_WARNING_STYLE.">Error-Write-File</b> #".@$filePath."#<br>",DEBUG_MESSAGE);
+            }
           }
         }
       }
@@ -561,10 +579,15 @@ function grap_favicon($options=array(), $consoleMode = false) {
     if (!empty($filePath)) {
       if (!function_exists('file_get_contents')) {
         $fh = @fopen($filePath, 'r');
-        while (!feof($fh)) {
-          $content .= fread($fh, 128); // Because filesize() will not work on URLS?
+        if ($fh) {
+          while (!feof($fh)) {
+            $content .= fread($fh, BUFFER_SIZE); // Because filesize() will not work on URLS?
+          }
+          fclose($fh);
+        } else {
+          # TO DO:
+          # ERROR READING
         }
-        fclose($fh);
       } else {
         $content = file_get_contents($filePath);
       }
@@ -589,27 +612,18 @@ function load($url) {
   $previous_url = null;
   setGlobal('redirect_url',null);
   
-  //  Get Options
-  $opt_curl = gethttpoption('curl_enabled',0);
-  $operationTimeOut = gethttpoption('http_timeout', 60);
-  $connectTimeout = gethttpoption('http_timeout_connect', 30);
-  $dnsTimeout = gethttpoption('dns_timeout', 120);
-  $userAgent = gethttpoption('http_useragent', null);
-  if ($opt_curl) {
-    writeOutput("cURL: Operation Timeout=$operationTimeOut, Connection Timeout=$connectTimeout, DNS Timeout=$dnsTimeout","<b style=".HTML_WARNING_STYLE.">cURL</b> #Operation Timeout=$operationTimeOut, Connection Timeout=$connectTimeout, DNS Timeout=$dnsTimeout#<br>",DEBUG_MESSAGE);
-    $curlVerbose = gethttpoption('curl_verbose', false);
-    $curlShowProgress = gethttpoption('curl_showprogress', false);
+  if (getConfiguration("curl","enabled")) {
+    writeOutput("cURL: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),"<b style=".HTML_WARNING_STYLE.">cURL</b> #Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout") . "#<br>",DEBUG_MESSAGE);
     $ch = curl_init($url);
-    if (!is_null($userAgent)) { curl_setopt($ch, CURLOPT_USERAGENT, $userAgent); }
-    curl_setopt($ch, CURLOPT_VERBOSE, $curlVerbose);
-    curl_setopt($ch, CURLOPT_TIMEOUT, $operationTimeOut);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $connectTimeout); 
-    curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, $dnsTimeout); 
+    if (!is_null($userAgent)) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
+    curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
+    curl_setopt($ch, CURLOPT_TIMEOUT, getConfiguration("http","http_timeout"));
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, getConfiguration("http","http_timeout_connect")); 
+    curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, getConfiguration("http","dns_timeout")); 
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    if ($curlShowProgress) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
+    if (getConfiguration("curl","showprogress")) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
     $content = curl_exec($ch);
     $curl_response = curl_getinfo($ch);
     $http_code = $curl_response['http_code'];
@@ -630,31 +644,28 @@ function load($url) {
   } else {
     $context_options = array(
       'http' => array(
-        'user_agent' => $userAgent,
-        'timeout' => $operationTimeOut,
+        'user_agent' => getConfiguration("http","useragent"),
+        'timeout' => getConfiguration("http","http_timeout"),
       )
     );
     $context = stream_context_create($context_options);
-	  if (!function_exists('file_get_contents')) {
+	  if (!getCapability("php","get")) {
       $fh = fopen($url, 'r', FALSE, $context);
-      $content = '';
-      while (!feof($fh)) {
-        $content .= fread($fh, 128); // Because filesize() will not work on URLS?
+      if ($fh) {
+        $content = '';
+        while (!feof($fh)) {
+          $content .= fread($fh, BUFFER_SIZE); // Because filesize() will not work on URLS?
+        }
+        fclose($fh);
+      } else {
+        # TO DO:
+        # error getting handle
       }
-      fclose($fh);
     } else {
       $content = file_get_contents($url, NULL, $context);
     }
   }
   return $content;
-}
-
-/* Get an option, if null use default */
-function gethttpoption($option,$default)
-{
-  $tempvalue = getGlobal($option);
-  if (is_null($tempvalue)) { $tempvalue = $default; }
-  return $tempvalue;
 }
 
 /* HELPER: Change URL from relative to absolute */
@@ -677,7 +688,7 @@ function geticonextension($url, $noFallback = false) {
   if (!empty($url))
   {
     // If exif_imagetype is not available, it will simply return the extension
-    if (function_exists('exif_imagetype')) {
+    if (getCapability("php","exif")) {
       $filetype = @exif_imagetype($url);
       if ($filetype) {
         if ($filetype == IMAGETYPE_GIF) { $retval = "gif"; }
@@ -719,10 +730,50 @@ function getGlobal($variable) {
 /*  Set PHP's User Agent */
 function initializeUserAgent()
 {
-  if (function_exists('exif_imagetype')) {
-    $userAgent = gethttpoption('http_useragent', null);
+  if (getCapability("php","exif")) {
+    $userAgent = getConfiguration("http","useragent");
     if (!is_null($userAgent)) { ini_set('user_agent', $userAgent); }
   }
+}
+
+function showBoolean($value)
+{
+  $retval = "null";
+  if (isset($value)) {
+    $value = setBoolean($value);
+    if ($value) { $retval = "true"; } else { $retval = "false"; }
+  }
+  return $retval;
+}
+
+function setBoolean($value)
+{
+  $retval = false;
+  if (is_bool($value)) {
+    $retval = $value;
+  } elseif (is_numeric($value)) {
+    if ($value > 0) { $retval = true; }
+  } elseif (is_string($value)) {
+    if ((strtolower($value) == "true") || (strtolower($value) == "yes") || (strtolower($value) == "enabled") || (strtolower($value) == "enable")) {
+      $retval = true;
+    }
+  } else {
+    if (isset($value)) {
+      $retval = true;
+    }
+  }
+  return $retval;
+}
+
+function setRange($value,$min = 0,$max = 0)
+{
+  if (is_numeric($value))
+  {
+    if ($min != 0) { if ($value < $min) { $value = $min; } }
+    if ($max != 0) { if ($value > $max) { $value = $max; } }
+  }
+  
+  return $value;
 }
 
 /*
@@ -843,8 +894,8 @@ function getAPIurl($url,$domain,$size = 16)
 /*  Output Function */
 function writeOutput($text,$html = null,$type = 0)
 {
-  global $debug;
-  global $consoleMode;
+  $debug = getConfiguration("global","debug");
+  $consoleMode = getConfiguration("mode","console");
   
   $flag_display = true;
   if (is_null($html)) { if ($text != SUPPRESS_OUTPUT) { $html = $text . "<br>"; } }
@@ -860,4 +911,113 @@ function writeOutput($text,$html = null,$type = 0)
   }
   
   return $flag_display;
+}
+
+/*
+**  Configuration Controller
+**
+*/
+function setConfiguration($scope = "global",$option,$value = null,$default = null,$type = 0)
+{
+  global $configuration;
+  $flag_fallback = true;
+  $flag_handled = false;
+
+  switch ($type) {
+    case CONFIG_TYPE_PATH:            /* Validate Path */
+      if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
+      break;
+    case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+      if (is_bool($value)) { $flag_fallback = false; }
+      break;
+    case CONFIG_TYPE_STRING:          /* Validate String */
+      if (is_string($value)) { $flag_fallback = false; }
+      break;
+    case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+      if (is_numeric($value)) { $flag_fallback = false; }
+      break;
+    case CONFIG_TYPE_SWITCH:          /* Validate Switch */
+      if (isset($value)) {
+        $flag_fallback = false;
+        $value = true;
+      }
+      break;
+    case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
+      $flag_handled = true;
+      if (isset($value)) {
+        $flag_handled = true;
+        $configuration[$scope][$option] = true;
+      }
+      if (isset($default)) {
+        $flag_handled = true;
+        $configuration[$scope][$option] = false;
+      }
+      break;
+    case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
+      if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
+      if (isset($value)) {
+        if (!is_null($value)) {
+          $flag_fallback = false;
+          if (strtolower($value) == "none") {
+            $value = null;
+          }
+        }
+      }
+      break;
+    default:                          /* Just see if it's set */
+      if (isset($value)) { $flag_fallback = false; }
+      break;
+  }
+    
+  if (!$flag_handled) {
+    if ($flag_fallback) { $value = $default; }
+    $configuration[$scope][$option] = $value;
+  }
+}
+
+function getConfiguration($scope = "global",$option)
+{
+  global $configuration;
+  
+  if (isset($configuration[$scope][$option])) { $value = $configuration[$scope][$option]; } else { $value = null; }
+  
+  return $value;
+}
+
+/*
+** Capability Controller
+*/
+
+function addCapability($scope = "global", $capability,$value = false)
+{
+  global $capabilities;
+  
+  $capabilities[$scope][$capability] = $value;
+}
+
+function getCapability($scope = "global", $capability)
+{
+  global $capabilities;
+  
+  if (isset($capabilities[$scope][$capability])) { $value = $capabilities[$scope][$capability]; } else { $value = null; }
+  
+  return $value;
+}
+
+/*
+** List Conroller
+*/
+function loadList($list)
+{
+  $retval = null;
+  if (isset($list)) {
+    if (file_exists($list)) {
+      $retval = file($list,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    } else {
+      if (count($retval) == 0) {
+        $retval = explode(",",str_replace(array(",",";"," "),",",$list));
+      }
+    }
+  }
+  return $retval;
 }
