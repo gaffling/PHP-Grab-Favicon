@@ -43,7 +43,7 @@ Infos about Favicon
 -------------------
 https://github.com/audreyr/favicon-cheat-sheet
 
-###### Copyright 2019-2020 Igor Gaffling
+###### Copyright 2019-2023 Igor Gaffling
 
 */
 
@@ -503,6 +503,7 @@ function grap_favicon($options=array(), $consoleMode = false) {
 /* HELPER load use curl or file_get_contents (both with user_agent) and fopen/fread as fallback */
 function load($url, $DEBUG, $consoleMode = false, $timeOut = 60) {
   if (function_exists('curl_version')) {
+    if (!isset($timeOut)) { $timeOut = 60; }
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_USERAGENT, getGlobal('curl_useragent'));
     curl_setopt($ch, CURLOPT_VERBOSE, getGlobal('curl_verbose'));
