@@ -78,7 +78,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305221223');
+define('PROGRAM_VERSION', '202305221305');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
 
 define('DEFAULT_ENABLE_APIS', true);
@@ -290,7 +290,6 @@ setConfiguration("curl","showprogress",$options['curl-showprogress'],false,CONFI
 
 if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
 
-
 /*  
 **  Process Lists
 */
@@ -363,6 +362,7 @@ if (empty($URLList)) {
 /*  Set PHP User Agent if Required */
 initializeUserAgent();
 
+/*  Start the Show */
 writeOutput("Debug ON",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
 
 /*  Process List */
@@ -474,7 +474,7 @@ function grap_favicon($url) {
     }
   } // END If $trySelf == TRUE ONLY USE APIs
 
-  // If nothink works: Get the Favicon from API
+  // If nothing works: Get the Favicon from API
   if ((!isset($favicon)) || (empty($favicon))) {
     $api_count = getAPICount();
     
@@ -613,6 +613,7 @@ function load($url) {
   setGlobal('redirect_url',null);
   
   if (getConfiguration("curl","enabled")) {
+    // cURL Method
     writeOutput("cURL: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),"<b style=".HTML_WARNING_STYLE.">cURL</b> #Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout") . "#<br>",DEBUG_MESSAGE);
     $ch = curl_init($url);
     if (!is_null($userAgent)) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
@@ -642,6 +643,7 @@ function load($url) {
     curl_close($ch);
     unset($ch);
   } else {
+    //  Non-Curl Method
     $context_options = array(
       'http' => array(
         'user_agent' => getConfiguration("http","useragent"),
@@ -650,6 +652,7 @@ function load($url) {
     );
     $context = stream_context_create($context_options);
 	  if (!getCapability("php","get")) {
+      //  Fallback if file_get_contents is not available
       $fh = fopen($url, 'r', FALSE, $context);
       if ($fh) {
         $content = '';
