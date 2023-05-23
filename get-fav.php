@@ -25,7 +25,6 @@ TO DO:
     --disableblocklist
   optional query string/form support for options
     default will be disabled for security reasons
-  use new structures for configuration/capabiltiies
   save sub-folders
   more error checking
   
@@ -63,7 +62,7 @@ Infos about Favicon
 -------------------
 https://github.com/audreyr/favicon-cheat-sheet
 
-###### Copyright 2019-2020 Igor Gaffling
+###### Copyright 2019-2023 Igor Gaffling
 
 */
  
@@ -80,8 +79,8 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305231603');
-define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
+define('PROGRAM_VERSION', '202305231619');
+define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
 define('DEFAULT_ENABLE_APIS', true);
@@ -133,6 +132,18 @@ $URLList = array();
 $apiList = array();
 $configuration = array();
 $capabilities = array();
+
+/*
+**  Load APIs
+**  addAPI($name,$url,$json,$enabled,$json_structure())
+*/
+
+addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,DEFAULT_ENABLE_APIS);
+addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons","0","src"));
+addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
+
+$display_API_list = getAPIList();
+if (is_null($display_API_list)) { $display_API_list = "none"; }
 
 /*
 **  Determine Capabilities of PHP installation
@@ -258,7 +269,7 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--dns-timeout=SECONDS       Set dns lookup timeout (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
   echo "\n";
   echo "Lists can be separated with space, comma or semi-colon.\n";
-  echo "Available APIs: faviconkit, favicongrabber, google\n";
+  echo "Available APIs: $display_API_list\n";
   exit;
 }
 
@@ -335,45 +346,45 @@ addBlocklist("3ca64f83fdcf25135d87e08af65e68c9");     //  Google Default Icon
 addBlocklist("d0fefd1fde1699e90e96a5038457b061");     //  Internet Archive Default Icon
 
 /*
-**  Load APIs
-**  addAPI($name,$url,$json,$enabled,$json_structure())
+**  Enable/Disable any APIs As Needed
 */
 
-addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,getConfiguration("global","api"));
-addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,getConfiguration("global","api"),array("icons","0","src"));
-addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,getConfiguration("global","api"));
-
-/*
-**  Enable specific APIs
-*/
-if (!empty($enabledAPIList)) {
-  foreach ($enabledAPIList as $enableAPIname) {
-    foreach ($apiList as &$APIrecord) {
-      if (strcasecmp($APIrecord['name'], $enableAPIname) == 0) {
-        if (!$APIrecord['enabled']) {
-          $APIrecord['enabled'] = true;
+if (getConfiguration("global","api")) {
+  if (!empty($enabledAPIList)) {
+    foreach ($enabledAPIList as $enableAPIname) {
+      foreach ($apiList as &$APIrecord) {
+        if (strcasecmp($APIrecord['name'], $enableAPIname) == 0) {
+          if (!$APIrecord['enabled']) {
+            $APIrecord['enabled'] = true;
+          }
+          break;
         }
-        break;
       }
+    }
+  }
+  if (!empty($disabledAPIList)) {
+    foreach ($disabledAPIList as $disableAPIname) {
+      foreach ($apiList as &$APIrecord) {
+        if (strcasecmp($APIrecord['name'], $disableAPIname) == 0) {
+          if ($APIrecord['enabled']) {
+            $APIrecord['enabled'] = false;
+          }
+          break;
+        }
+      }    
+    }
+  }
+} else {
+  foreach ($apiList as &$APIrecord) {
+    if ($APIrecord['enabled']) {
+      $APIrecord['enabled'] = false;
     }
   }
 }
 
-/*
-**  Disable specific APIs
-*/
-if (!empty($disabledAPIList)) {
-  foreach ($disabledAPIList as $disableAPIname) {
-    foreach ($apiList as &$APIrecord) {
-      if (strcasecmp($APIrecord['name'], $disableAPIname) == 0) {
-        if ($APIrecord['enabled']) {
-          $APIrecord['enabled'] = false;
-        }
-        break;
-      }
-    }    
-  }
-}
+# Refresh Display List
+$display_API_list = getAPIList();
+if (is_null($display_API_list)) { $display_API_list = "none"; }
 
 
 /*  Start the Show */
@@ -419,7 +430,7 @@ foreach ($favicons as $favicon) {
 }
 
 /*  Show Runtime */
-writeOutput("\nRuntime: ".round(microtime(true)-$time_start,2)." Sec.","<br><br><tt>Runtime: ".round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2)." Sec.");
+writeOutput("\nRuntime: ".round(microtime(true)-$time_start,2)." second(s)","<br><br><tt>Runtime: ".round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2)." second(s)</tt>");
 
 
 /*****************************************************
@@ -645,6 +656,8 @@ function grap_favicon($url) {
     set_time_limit($max_execution_time); // set it back to the old value
   }
 
+  writeOutput("* * *",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+
   // Return Favicon Url
   return $filePath;
 
@@ -834,6 +847,29 @@ function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array
   $entry['json_structure'] = $json_structure;
 
   array_push($apiList,$entry);
+}
+
+function getAPIList() {
+  global $apiList;
+  
+  $retval = null;
+  $counter = 0;
+  
+  if (!empty($apiList)) {
+    foreach ($apiList as $item) {
+      $api_name = $item['name'];
+      $api_enabled = $item['enabled'];
+      if (!is_null($api_name)) {
+        if (!is_null($retval)) {
+          $retval .= ", ";
+        }
+        $retval .= $api_name;
+        if (!$api_enabled) { $retval .= "*"; }
+      }
+    }
+  }
+  
+  return $retval;
 }
 
 function getAPICount($isenabled = true) {
