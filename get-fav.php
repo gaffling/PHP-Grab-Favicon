@@ -14,6 +14,7 @@ Changelog:
   validate path
   validate capabilities
   individual api enable/disable
+  updated help
 
 TO DO:
   blocklist of icons (for example if the apis return archive.org's icon)
@@ -79,7 +80,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305231247');
+define('PROGRAM_VERSION', '202305231603');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
 
 /*  Defaults */
@@ -224,31 +225,40 @@ if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['versi
 }
 
 if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?']))) {
-  # TO DO:
-  # this needs updated
   echo "Usage: $script_name (Switches)\n\n";
-  echo "--list=FILE/LIST            Filename or a delimited list of URLs to check.\n";
-  echo "--blocklist=FILE/LIST       Filename or a delimited list of MD5 hashes to block.\n";
+  echo "--configfile=FILE           Pathname to read for configuration.\n";
+  echo "--list=FILE/LIST            Pathname or a delimited list of URLs to check.\n";
+  echo "--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.\n";
   echo "--path=PATH                 Location to store icons (default is " . DEFAULT_LOCAL_PATH . ")\n";
   echo "\n";
-  echo "--tryhomepage               Try homepage first, then APIs. (default is true)\n";
+  echo "--tryhomepage               Try homepage first, then APIs. (default is " . showBoolean(DEFAULT_TRY_HOMEPAGE) . ")\n";
   echo "--onlyuseapis               Only use APIs.\n";
   echo "--disableapis               Don't use APIs.\n";
-  echo "--enableblocklist           Enable blocklist. (default is true)\n";
+  echo "--enableblocklist           Enable blocklist. (default is ". showBoolean(DEFAULT_ENABLE_BLOCKLIST) . ")\n";
   echo "--disableblocklist          Disable blocklist.\n";
-  echo "--store                     Store favicons locally. (default is true)\n";
+  echo "--store                     Store favicons locally. (default is ". showBoolean(DEFAULT_STORE) . ")\n";
   echo "--nostore                   Do not store favicons locally.\n";
-  echo "--overwrite                 Overwrite local favicons (default is false)\n";
-  echo "--skip                      Skip local favicons if they are already present. (default is true)\n";
+  echo "--overwrite                 Overwrite local favicons. (default is ". showBoolean(DEFAULT_OVERWRITE) . ")\n";
+  echo "--skip                      Skip local favicons.\n";
   echo "--consolemode               Force console output.\n";
   echo "--noconsolemode             Force HTML output.\n";
   echo "--debug                     Enable debug messages.\n";
+  echo "--help                      This listing and exit.\n";
+  echo "--version                   Show version and exit.\n";
+  echo "\n";
+  echo "Advanced:\n";
   echo "--user-agent=AGENT_STRING   Customize the user agent.\n";
+  echo "--nocurl                    Disable cURL.\n";
   echo "--curl-verbose              Enable cURL verbose.\n";
-  echo "--http-timeout=SECONDS      Set http timeout (default is 60).\n";
+  echo "--curl-progress             Enable cURL progress bar.\n";
+  echo "--enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.\n";
+  echo "--disableapis=FILE/LIST     Filename or a delimited list of APIs to disable.\n";
+  echo "--http-timeout=SECONDS      Set http timeout (default is " . DEFAULT_HTTP_TIMEOUT . ").\n";
+  echo "--connect-timeout=SECONDS   Set http connect timeout (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
+  echo "--dns-timeout=SECONDS       Set dns lookup timeout (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
   echo "\n";
   echo "Lists can be separated with space, comma or semi-colon.\n";
-  echo "For a complete list of switches, please read the 'switches.txt' file.\n";
+  echo "Available APIs: faviconkit, favicongrabber, google\n";
   exit;
 }
 
