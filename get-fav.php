@@ -11,12 +11,11 @@ Changelog:
   unified output to a single function for both console and html
   moved to a configuration array/structure
   simplified grap_favicon function, only the url is passed in, the other options are read from the configuration structure
+  validate path
+  validate capabilities
+  individual api enable/disable
 
 TO DO:
-  read config file
-    will look in current dir
-    can specify with -c=path, --config=path (or --configuration)
-    should just general configuration be in an array instead of individual globals?
   blocklist of icons (for example if the apis return archive.org's icon)
     list of md5 hashes
     skipped if blocklist is empty or option is goven
@@ -26,6 +25,8 @@ TO DO:
   optional query string/form support for options
     default will be disabled for security reasons
   use new structures for configuration/capabiltiies
+  save sub-folders
+  more error checking
   
   
 PHP Grab Favicon
@@ -74,13 +75,14 @@ $time_start = microtime(true);
 define('ENABLE_WEB_INPUT', false);
 
 /*
-**  Set Defaults
+**  Project
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305221634');
+define('PROGRAM_VERSION', '202305231247');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2020 Igor Gaffling');
 
+/*  Defaults */
 define('DEFAULT_ENABLE_APIS', true);
 define('DEFAULT_USE_CURL', true);
 define('DEFAULT_STORE', true);
@@ -93,17 +95,27 @@ define('DEFAULT_HTTP_TIMEOUT', 60);
 define('DEFAULT_HTTP_CONNECT_TIMEOUT', 30);
 define('DEFAULT_DNS_TIMEOUT', 120);
 define('DEFAULT_USER_AGENT', "FaviconBot/1.0/");
+
+/*  Ranges */
 define('RANGE_HTTP_TIMEOUT_MINIMUM', 0);
 define('RANGE_HTTP_TIMEOUT_MAXIMUM', 600);
 define('RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM', 0);
 define('RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM', 600);
 define('RANGE_DNS_TIMEOUT_MINIMUM', 0);
 define('RANGE_DNS_TIMEOUT_MAXIMUM', 600);
+
+/*  Buffers */
 define('BUFFER_SIZE', 128);
+
+/*  HTML */
 define('HTML_WARNING_STYLE', ".HTML_WARNING_STYLE.");
+
+/*  Special Values */
 define('SUPPRESS_OUTPUT', "<NONE>");
 define('GOOGLE_DEFAULT_ICON_MD5', '3ca64f83fdcf25135d87e08af65e68c9');
 define('DEBUG_MESSAGE', 1);
+
+/*  Config Types */
 define('CONFIG_TYPE_STRING', 1);
 define('CONFIG_TYPE_BOOLEAN', 2);
 define('CONFIG_TYPE_NUMERIC', 3);
@@ -120,11 +132,10 @@ $URLList = array();
 $apiList = array();
 $configuration = array();
 $capabilities = array();
-$debug = false;
-$consoleMode = false;
 
 /*
 **  Determine Capabilities of PHP installation
+**  addCapability($scope,$capability,$value)
 */
 
 addCapability("php","console",(php_sapi_name() == "cli"));
@@ -133,7 +144,10 @@ addCapability("php","exif",function_exists('exif_imagetype'));
 addCapability("php","get",function_exists('file_get_contents'));
 
 
-/* Set Configuration Defaults */
+/*  
+** Set Configuration Defaults
+** setConfiguration($scope,$option,$value,$default,$type)
+*/
 
 setConfiguration("global","debug",false);
 setConfiguration("global","api",DEFAULT_ENABLE_APIS);
@@ -156,7 +170,6 @@ if (isset($_SERVER['SERVER_NAME'])) { setConfiguration("http","default_useragent
 if (!DEFAULT_USE_CURL) { setConfiguration("curl","enabled",false); }
 
 if (getConfiguration("mode","console")) { $script_name = basename(__FILE__); } else { $script_name = basename($_SERVER['PHP_SELF']); }
-
 
 /* Command Line Options */
 $shortopts  = "";
@@ -202,24 +215,17 @@ $longopts  = array(
   "ver",
 );
 
-# TO DO:
-#   "enableapi::"
-#   "disableapi::"
-#
-# e.g. --enableapi=google,faviconkit
-
-
 $options = getopt($shortopts, $longopts);
 
-if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['version'])))
-{
+if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['version']))) {
   echo PROJECT_NAME . " (" . PROGRAM_NAME . ") v" . PROGRAM_VERSION ."\n";
   echo PROGRAM_COPYRIGHT . "\n";
   exit;
 }
 
-if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])))
-{
+if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?']))) {
+  # TO DO:
+  # this needs updated
   echo "Usage: $script_name (Switches)\n\n";
   echo "--list=FILE/LIST            Filename or a delimited list of URLs to check.\n";
   echo "--blocklist=FILE/LIST       Filename or a delimited list of MD5 hashes to block.\n";
@@ -271,9 +277,11 @@ if (isset($options['configfile'])) {
   if (!is_null($options['configfile'])) {
     if (file_exists($options['configfile'])) {
       $configuration_from_file = parse_ini_file($options['configfile'],true,INI_SCANNER_RAW);
-      $configuration = array_replace_recursive($configuration, $configuration_from_file);
-      unset($configuration_from_file);
-      validateConfiguration();
+      if (isset($configuration_from_file)) {
+        $configuration = array_replace_recursive($configuration, $configuration_from_file);
+        unset($configuration_from_file);
+        validateConfiguration();
+      }
     }
   }
 }
@@ -311,29 +319,59 @@ $enabledAPIList = loadList((isset($options['enableapis']))?$options['enableapis'
 $disabledAPIList = loadList((isset($options['disableapis']))?$options['disableapis']:null);
 
 /*
-**  Create Blocklist
+**  Add To Blocklist
 */
-$blockList = array(
-  '3ca64f83fdcf25135d87e08af65e68c9',
-  'd0fefd1fde1699e90e96a5038457b061',
-);
+addBlocklist("3ca64f83fdcf25135d87e08af65e68c9");     //  Google Default Icon
+addBlocklist("d0fefd1fde1699e90e96a5038457b061");     //  Internet Archive Default Icon
+
+/*
+**  Load APIs
+**  addAPI($name,$url,$json,$enabled,$json_structure())
+*/
+
+addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,getConfiguration("global","api"));
+addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,getConfiguration("global","api"),array("icons","0","src"));
+addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,getConfiguration("global","api"));
+
+/*
+**  Enable specific APIs
+*/
+if (!empty($enabledAPIList)) {
+  foreach ($enabledAPIList as $enableAPIname) {
+    foreach ($apiList as &$APIrecord) {
+      if (strcasecmp($APIrecord['name'], $enableAPIname) == 0) {
+        if (!$APIrecord['enabled']) {
+          $APIrecord['enabled'] = true;
+        }
+        break;
+      }
+    }
+  }
+}
+
+/*
+**  Disable specific APIs
+*/
+if (!empty($disabledAPIList)) {
+  foreach ($disabledAPIList as $disableAPIname) {
+    foreach ($apiList as &$APIrecord) {
+      if (strcasecmp($APIrecord['name'], $disableAPIname) == 0) {
+        if ($APIrecord['enabled']) {
+          $APIrecord['enabled'] = false;
+        }
+        break;
+      }
+    }    
+  }
+}
 
 
-$flag_enabled = true;
-
-if (isset($options['disableallapis'])) { $flag_enabled = false; }
-
-/* Initialize APIs */
-addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,$flag_enabled);
-addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,$flag_enabled,array("icons","0","src"));
-addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,$flag_enabled);
-
-# TO DO:
-#   Go through APIs and enable/disable individually
-
+/*  Start the Show */
+writeOutput("Debug ON",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
 
 /* If test URLs is empty, setup testing list */
 if (empty($URLList)) {
+  writeOutput("No URLs provided, using test list",SUPPRESS_OUTPUT);
   $URLList = array(
     'http://aws.amazon.com',
     'http://www.apple.com',
@@ -359,9 +397,6 @@ if (empty($URLList)) {
 
 /*  Set PHP User Agent if Required */
 initializeUserAgent();
-
-/*  Start the Show */
-writeOutput("Debug ON",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
 
 /*  Process List */
 foreach ($URLList as $url) {
@@ -478,8 +513,7 @@ function grap_favicon($url) {
   if ((!isset($favicon)) || (empty($favicon))) {
     $api_count = getAPICount();
     
-    if ($api_count > 0)
-    {
+    if ($api_count > 0) {
       writeOutput("Selecting API",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       $selectAPI = getRandomAPI();
       if (isset($selectAPI['name'])) {
@@ -489,8 +523,7 @@ function grap_favicon($url) {
         $api_enabled = $selectAPI['enabled'];
         $api_json_structure = $selectAPI['json_structure'];
         
-        if ($api_enabled)
-        {
+        if ($api_enabled) {
           writeOutput("Using API: $api_name",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
           $favicon = getAPIurl($api_url,$domain,DEFAULT_SIZE);
           if ($api_json) {
@@ -708,8 +741,7 @@ function geticonextension($url, $noFallback = false) {
   return $retval;
 }
 
-function validateicon($pathname, $removeIfInvalid = false)
-{
+function validateicon($pathname, $removeIfInvalid = false) {
   # TO DO
   #   determine if the pathname is:
   #     a valid image file
@@ -730,16 +762,16 @@ function getGlobal($variable) {
 }
 
 /*  Set PHP's User Agent */
-function initializeUserAgent()
-{
+function initializeUserAgent() {
   if (getCapability("php","exif")) {
     $userAgent = getConfiguration("http","useragent");
+    if (is_null($userAgent)) { $userAgent = getConfiguration("http","default_useragent"); }
     if (!is_null($userAgent)) { ini_set('user_agent', $userAgent); }
   }
 }
 
-function showBoolean($value)
-{
+/*  Show Boolean */
+function showBoolean($value) {
   $retval = "null";
   if (isset($value)) {
     $value = setBoolean($value);
@@ -748,8 +780,8 @@ function showBoolean($value)
   return $retval;
 }
 
-function setBoolean($value)
-{
+/*  Set/Convert To Boolean */
+function setBoolean($value) {
   $retval = false;
   if (is_bool($value)) {
     $retval = $value;
@@ -767,16 +799,13 @@ function setBoolean($value)
   return $retval;
 }
 
-function setRange($value,$min = null,$max = null)
-{
-  if (is_numeric($value))
-  {
+/*  Set/Convert A Numeric Range */
+function setRange($value,$min = null,$max = null) {
+  if (is_numeric($value)) {
     if (!is_null($min)) { if ($value < $min) { $value = $min; } }
     if (!is_null($max)) { if ($value > $max) { $value = $max; } }
   }
-  
   $value = intval($value);
-  
   return $value;
 }
 
@@ -784,8 +813,7 @@ function setRange($value,$min = null,$max = null)
 **  API Support Functions **
 */
 /* Add an API */
-function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array())
-{
+function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array()) {
   global $apiList;
 
   $entry = array();
@@ -798,21 +826,18 @@ function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array
   array_push($apiList,$entry);
 }
 
-function getAPICount($isenabled = true)
-{
+function getAPICount($isenabled = true) {
   global $apiList; 
   $retval = 0;
   
-  if (!empty($apiList))
-  {
+  if (!empty($apiList)) {
     foreach ($apiList as $item) {
       $api_name = $item['name'];
       $api_url = $item['url'];
       $api_json = $item['json'];
       $api_enabled = $item['enabled'];
       $api_json_structure = $item['json_structure'];
-      if (isset($api_name))
-      {
+      if (isset($api_name)) {
         if ($isenabled) {
           if ($api_enabled) { $retval++; }
         } else {
@@ -821,19 +846,16 @@ function getAPICount($isenabled = true)
       }
     }
   }
-  
   return $retval;
 }
 
 /* Return an API object */
-function getAPI($name)
-{
+function getAPI($name) {
   return lookupAPI('name',$name);
 }
 
 /* Select a Random API */
-function getRandomAPI()
-{
+function getRandomAPI() {
   global $apiList;
   
   $api_count = getAPICount();
@@ -844,13 +866,11 @@ function getRandomAPI()
   $return_object['enabled'] = false;
   $return_object['json_structure'] = array();
   
-  if ($api_count > 0)
-  {
+  if ($api_count > 0) {
     $counter = 0;
     foreach ($apiList as $item) {
       $counter++;
-      if ($item['enabled'] === true)
-      {
+      if ($item['enabled'] === true) {
         if ((rand(1,100) > rand(25, 75)) || ($counter == $api_count))
         {
           $return_object = $item;
@@ -863,8 +883,7 @@ function getRandomAPI()
 }
 
 /* Lookup API */
-function lookupAPI($element,$value)
-{
+function lookupAPI($element,$value) {
   global $apiList;
 
   $return_object = array();
@@ -874,21 +893,17 @@ function lookupAPI($element,$value)
   $return_object['enabled'] = false;
   $return_object['json_structure'] = array();
   
-  foreach ($apiList as $item)
-  {
-    if (strcasecmp($item[$element], $value) == 0)
-    {
+  foreach ($apiList as $item) {
+    if (strcasecmp($item[$element], $value) == 0) {
       $return_object = array();
       $return_object = $item;
       break;
     }
   }
-
   return $return_object;
 }
 
-function getAPIurl($url,$domain,$size = 16)
-{
+function getAPIurl($url,$domain,$size = 16) {
   $processed_url = $url;
   $processed_url = str_replace("<DOMAIN>",$domain,$processed_url);
   $processed_url = str_replace("<SIZE>",$size,$processed_url);
@@ -896,24 +911,20 @@ function getAPIurl($url,$domain,$size = 16)
 }
 
 /*  Output Function */
-function writeOutput($text,$html = null,$type = 0)
-{
+function writeOutput($text,$html = null,$type = 0) {
   $debug = getConfiguration("global","debug");
   $consoleMode = getConfiguration("mode","console");
   
   $flag_display = true;
   if (is_null($html)) { if ($text != SUPPRESS_OUTPUT) { $html = $text . "<br>"; } }
   if (($type == DEBUG_MESSAGE) && (!$debug)) { $flag_display = false; }
-  
-  if ($flag_display)
-  {
+  if ($flag_display) {
     if ($consoleMode) {
       if ($text != SUPPRESS_OUTPUT) { echo "$text\n"; }
     } else {
       if ($html != SUPPRESS_OUTPUT) { print($html ."\n"); }
     }
   }
-  
   return $flag_display;
 }
 
@@ -921,14 +932,12 @@ function writeOutput($text,$html = null,$type = 0)
 **  Configuration Controller
 **
 */
-function setConfiguration($scope = "global",$option,$value = null,$default = null,$type = 0)
-{
+function setConfiguration($scope = "global",$option,$value = null,$default = null,$type = 0) {
   global $configuration;
   $flag_fallback = true;
   $flag_handled = false;
   
-  if (isset($value))
-  {
+  if (isset($value)) {
     switch ($type) {
       case CONFIG_TYPE_PATH:            /* Validate Path */
         if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
@@ -980,11 +989,9 @@ function setConfiguration($scope = "global",$option,$value = null,$default = nul
     if ($flag_fallback) { $value = $default; }
     if (isset($value)) { $configuration[$scope][$option] = $value; }
   }
-  
 }
 
-function getConfiguration($scope = "global",$option)
-{
+function getConfiguration($scope = "global",$option) {
   global $configuration;
   
   if (isset($configuration[$scope][$option])) { $value = $configuration[$scope][$option]; } else { $value = null; }
@@ -992,13 +999,25 @@ function getConfiguration($scope = "global",$option)
   return $value;
 }
 
-function validateConfigurationSetting($scope = "global",$option,$type = 0,$min = 0,$max = 0)
-{
+function validateConfigurationSetting($scope = "global",$option,$type = 0,$min = 0,$max = 0) {
   global $configuration;
   
   if (isset($configuration[$scope][$option])) {
     $value = $configuration[$scope][$option];
     switch ($type) {
+      case CONFIG_TYPE_PATH:
+        if (isset($value)) {
+          if (!file_exists($value)) {
+            $value = null;
+          }
+        }
+        if ((!isset($value)) || (is_null($value))) {
+          if ($min == 0) {
+            $min = DEFAULT_LOCAL_PATH;
+          }
+          $configuration[$scope][$option] = $min;
+        }
+        break;
       case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
         $value = setRange($value,$min,$max);
         if (is_numeric($value)) { $configuration[$scope][$option] = $value; }
@@ -1013,37 +1032,55 @@ function validateConfigurationSetting($scope = "global",$option,$type = 0,$min =
   }
 }
 
-function validateConfiguration()
-{
+function validateConfiguration() {
   # Ensure that booleans are properly typed
   # Ensure numerics are numeric and in proper ranges
   
   validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("http","try_homepage",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
+  validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
+  validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
   validateConfigurationSetting("http","http_timeout",CONFIG_TYPE_NUMERIC,RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM);
   validateConfigurationSetting("http","http_timeout_connect",CONFIG_TYPE_NUMERIC,RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM);
-  validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","try_homepage",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
+
+  if (getConfiguration("files","store")) {
+    if (is_null(getConfiguration("files","local_path"))) {
+        writeOutput("validateConfiguration: local_path is not set, disabling store option",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        setConfiguration("files","store",false);
+    } else {
+      if (!file_exists(getConfiguration("files","local_path"))) {
+        writeOutput("validateConfiguration: local_path is invalid, disabling store option",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        setConfiguration("files","store",false);
+      }
+    }
+  }
+  if (getConfiguration("curl","enabled")) {
+    if (!getCapability("php","curl")) {
+      writeOutput("validateConfiguration: curl is enabled but not supported, disabling",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      setConfiguration("curl","enabled",false);
+    }
+  }
+  
 }
 
 /*
 ** Capability Controller
 */
 
-function addCapability($scope = "global", $capability,$value = false)
-{
+function addCapability($scope = "global", $capability,$value = false) {
   global $capabilities;
   
   $capabilities[$scope][$capability] = $value;
 }
 
-function getCapability($scope = "global", $capability)
-{
+function getCapability($scope = "global", $capability) {
   global $capabilities;
   
   if (isset($capabilities[$scope][$capability])) { $value = $capabilities[$scope][$capability]; } else { $value = null; }
@@ -1052,11 +1089,38 @@ function getCapability($scope = "global", $capability)
 }
 
 /*
-** List Conroller
+** Blocklist Controller
 */
-function loadList($list)
-{
-  $retval = null;
+function addBlocklist($value) {
+  global $blockList;
+  
+  if (isset($value)) {
+    if (!searchBlocklist($value)) {
+      array_push($blockList,strtolower($value));
+    }
+  }
+}
+
+function searchBlocklist($value) {
+  global $blockList;
+
+  $retval = false;
+  if (isset($value)) {
+    foreach ($blockList as $item) {
+      if (strtolower($item) == strtolower($value)) {
+        $retval = true;
+        break;
+      }
+    }
+  }
+  return $retval;
+}
+
+/*
+** List Controller
+*/
+function loadList($list) {
+  $retval = array();
   if (isset($list)) {
     if (file_exists($list)) {
       $retval = file($list,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
