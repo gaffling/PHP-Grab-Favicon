@@ -15,8 +15,10 @@ Changelog:
   validate capabilities
   individual api enable/disable
   updated help
+  added more timeouts for PHP base functions
 
 TO DO:
+  show number of icons being searched for at start
   blocklist of icons (for example if the apis return archive.org's icon)
     list of md5 hashes
     skipped if blocklist is empty or option is goven
@@ -27,7 +29,18 @@ TO DO:
     default will be disabled for security reasons
   save sub-folders
   more error checking
+  when embedding icon get proper mime type
+  log file
+    timestamp option
+    append option
   
+ISSUES:
+  exif_imagetype's HTTP functions are primitive and will cause icon grabbing to fail when they shouldn't
+    cvs.com
+    fredmeyer.com
+    
+        
+    
   
 PHP Grab Favicon
 ================
@@ -79,7 +92,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305231619');
+define('PROGRAM_VERSION', '202305241445');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
@@ -114,6 +127,7 @@ define('HTML_WARNING_STYLE', ".HTML_WARNING_STYLE.");
 define('SUPPRESS_OUTPUT', "<NONE>");
 define('GOOGLE_DEFAULT_ICON_MD5', '3ca64f83fdcf25135d87e08af65e68c9');
 define('DEBUG_MESSAGE', 1);
+define('URL_PATH_FAVICON', "favicon.ico");
 
 /*  Config Types */
 define('CONFIG_TYPE_STRING', 1);
@@ -416,8 +430,8 @@ if (empty($URLList)) {
   );
 }
 
-/*  Set PHP User Agent if Required */
-initializeUserAgent();
+/*  Set PHP User Agent/Timeouts if Required */
+initializePHPAgent();
 
 /*  Process List */
 foreach ($URLList as $url) {
@@ -447,7 +461,7 @@ function grap_favicon($url) {
   $trySelf      = getConfiguration("http","try_homepage");
   $debug        = getConfiguration("global","debug");
   $overwrite    = getConfiguration("files","overwrite");
-
+  
   $api_name = null;
   $api_url = null;
   $api_json = false;
@@ -462,73 +476,102 @@ function grap_favicon($url) {
   }
 
 	// Get the Domain from the URL
-  $domain = parse_url($url, PHP_URL_HOST);
+  $parsed_url = parse_url($url);
+  $protocol = "http";
+  $domain = $url;
+  $url_port = null;
+  $url_user = null;
+  $url_password = null;
+  $url_path = null;
+  
+  if (!empty($parsed_url)) {
+    $domain = $url;
+    if (isset($parsed_url['scheme'])) { $protocol = $parsed_url['scheme']; };
+    if (isset($parsed_url['host'])) { $domain = $parsed_url['host']; }
+    if (isset($parsed_url['port'])) { $url_port = $parsed_url['port']; } 
+    if (isset($parsed_url['user'])) { $url_user = $parsed_url['user']; } 
+    if (isset($parsed_url['pass'])) { $url_password = $parsed_url['pass']; } 
+    if (isset($parsed_url['path'])) { $url_path = $parsed_url['path']; } 
+    
+    // Check Domain
+    $domainParts = explode('.', $domain);
+    if(count($domainParts) == 3 and $domainParts[0]!='www') {
+      // With Subdomain (if not www)
+      $domain = $domainParts[0].'.'.
+                $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
+    } else if (count($domainParts) >= 2) {
+      // Without Subdomain
+      $domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
+    } else {
+      // Without http(s)
+      $domain = $url;
+    }
+  }
 
-  // Check Domain
-  $domainParts = explode('.', $domain);
-  if(count($domainParts) == 3 and $domainParts[0]!='www') {
-    // With Subdomain (if not www)
-    $domain = $domainParts[0].'.'.
-              $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-  } else if (count($domainParts) >= 2) {
-    // Without Subdomain
-		$domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-	} else {
-	  // Without http(s)
-	  $domain = $url;
-	}
-
-  writeOutput("Domain: $domain","<b style=".HTML_WARNING_STYLE.">Domain</b> #".@$domain."#<br>",DEBUG_MESSAGE);
+  writeOutput("Protocol: $protocol, Domain: $domain","<b style=".HTML_WARNING_STYLE.">Protocol</b> #".@$protocol."#<b style=".HTML_WARNING_STYLE.">;Domain</b> #".@$domain."#<br>",DEBUG_MESSAGE);
 
   // If $trySelf == TRUE ONLY USE APIs
   if (isset($trySelf) && $trySelf == true) {
-
-    // Load Page
-    $html = load($url);
-
-    if (empty($html)) {
-      writeOutput("No data received","<b style=".HTML_WARNING_STYLE.">No data received</b><br>",DEBUG_MESSAGE);
-    } else {
-      writeOutput("Attempting RegEx Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-      // Find Favicon with RegEx
-      $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
-      if (@preg_match($regExPattern, $html, $matchTag)) {
-        writeOutput("RegEx Initial Pattern Matched\n" . print_r($matchTag,TRUE),SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-        $regExPattern = '/href=(\'|\")(.*?)\1/i';
-        if (isset($matchTag[1]) && @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
-          writeOutput("RegEx Secondary Pattern Matched",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-          if (isset($matchUrl[2])) {
-            writeOutput("Found Match, Building Link",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-            // Build Favicon Link
-            $favicon = rel2abs(trim($matchUrl[2]), 'http://'.$domain.'/');
-            writeOutput("Match $favicon",'<b style=".HTML_WARNING_STYLE.">Match</b> #'.@$favicon.'#<br>',DEBUG_MESSAGE);
-          } else {
-            writeOutput("Failed To Find Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-          }
-        } else {
-          writeOutput("RegEx Secondary Pattern Failed To Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-        }
-      } else {
-        writeOutput("RegEx Initial Pattern Failed To Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-      }
-    }
-
-    // If there is no Match: Try if there is a Favicon in the Root of the Domain
+    
+    // Try Direct Load
     if (empty($favicon)) {
-      $favicon = 'http://'.$domain.'/favicon.ico';
-      writeOutput("Attempting Direct Match using $favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-
-      // Try to Load Favicon
-      # if ( !@getimagesize($favicon) ) {
-      # https://www.php.net/manual/en/function.getimagesize.php
-      # Do not use getimagesize() to check that a given file is a valid image.
+      $favicon = addFavIconToURL($url);
+      writeOutput("Attempting Direct Load using $favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       $fileExtension = geticonextension($favicon,false);
       if (is_null($fileExtension)) {
         unset($favicon);
-        writeOutput("Failed Direct Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeOutput("Failed Direct Load",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       }
     }
-  } // END If $trySelf == TRUE ONLY USE APIs
+    
+    if (empty($favicon)) {
+      // Load Page
+      $html = load($url);
+
+      if (empty($html)) {
+        writeOutput("No data received","<b style=".HTML_WARNING_STYLE.">No data received</b><br>",DEBUG_MESSAGE);
+      } else {
+        writeOutput("Attempting RegEx Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        // Find Favicon with RegEx
+        $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
+        if (@preg_match($regExPattern, $html, $matchTag)) {
+          writeOutput("RegEx Initial Pattern Matched\n" . print_r($matchTag,TRUE),SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          $regExPattern = '/href=(\'|\")(.*?)\1/i';
+          if (isset($matchTag[1]) && @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
+            writeOutput("RegEx Secondary Pattern Matched",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+            if (isset($matchUrl[2])) {
+              writeOutput("Found Match, Building Link",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+              // Build Favicon Link
+              $favicon = rel2abs(trim($matchUrl[2]), $protocol . '://'.$domain.'/');
+              writeOutput("Match $favicon",'<b style=".HTML_WARNING_STYLE.">Match</b> #'.@$favicon.'#<br>',DEBUG_MESSAGE);
+            } else {
+              writeOutput("Failed To Find Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+            }
+          } else {
+            writeOutput("RegEx Secondary Pattern Failed To Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          }
+        } else {
+          writeOutput("RegEx Initial Pattern Failed To Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        }
+      }
+
+      // If there is no Match: Try if there is a Favicon in the Root of the Domain
+      if (empty($favicon)) {
+        $favicon = addFavIconToURL($protocol . '://'.$domain);
+        writeOutput("Attempting Direct Match using $favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+
+        // Try to Load Favicon
+        # if ( !@getimagesize($favicon) ) {
+        # https://www.php.net/manual/en/function.getimagesize.php
+        # Do not use getimagesize() to check that a given file is a valid image.
+        $fileExtension = geticonextension($favicon,false);
+        if (is_null($fileExtension)) {
+          unset($favicon);
+          writeOutput("Failed Direct Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        }
+      }
+    } // END If $trySelf == TRUE ONLY USE APIs
+  }
 
   // If nothing works: Get the Favicon from API
   if ((!isset($favicon)) || (empty($favicon))) {
@@ -627,8 +670,8 @@ function grap_favicon($url) {
     $filePath = $favicon;
   }
 
-	// FOR DEBUG ONLY
-	if ($debug) {
+  // FOR DEBUG ONLY
+  if ($debug) {
     // Load the Favicon from local file
     if (!empty($filePath)) {
       if (!getCapability("php","get")) {
@@ -665,6 +708,7 @@ function grap_favicon($url) {
 
 /* HELPER load use curl or file_get_contents (both with user_agent) and fopen/fread as fallback */
 function load($url) {
+  writeOutput("loading: url='$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
   $previous_url = null;
   setGlobal('redirect_url',null);
   if (getConfiguration("curl","enabled")) {
@@ -747,6 +791,9 @@ function geticonextension($url, $noFallback = false) {
   {
     // If exif_imagetype is not available, it will simply return the extension
     if (getCapability("php","exif")) {
+      $phpUA = ini_get("user_agent");
+      $timeout = ini_get("default_socket_timeout");
+      writeOutput("geticonextension: url='$url', useragent=$phpUA, timeout=$timeout",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       $filetype = @exif_imagetype($url);
       if ($filetype) {
         if ($filetype == IMAGETYPE_GIF) { $retval = "gif"; }
@@ -762,6 +809,15 @@ function geticonextension($url, $noFallback = false) {
     }
   }
   return $retval;
+}
+
+function addFavIconToURL($url) {
+  if(strrev($url)[0]==='/') {
+  } else {
+    $url .= "/";
+  }
+  $url .= URL_PATH_FAVICON;
+  return $url;
 }
 
 function validateicon($pathname, $removeIfInvalid = false) {
@@ -785,12 +841,11 @@ function getGlobal($variable) {
 }
 
 /*  Set PHP's User Agent */
-function initializeUserAgent() {
-  if (getCapability("php","exif")) {
-    $userAgent = getConfiguration("http","useragent");
-    if (is_null($userAgent)) { $userAgent = getConfiguration("http","default_useragent"); }
-    if (!is_null($userAgent)) { ini_set('user_agent', $userAgent); }
-  }
+function initializePHPAgent() {
+  $userAgent = getConfiguration("http","useragent");
+  if (is_null($userAgent)) { $userAgent = getConfiguration("http","default_useragent"); }
+  if (!is_null($userAgent)) { ini_set('user_agent', $userAgent); }
+  if (ini_get("default_socket_timeout") > getConfiguration("http","http_timeout")) { ini_set("default_socket_timeout", getConfiguration("http","http_timeout")); }
 }
 
 /*  Show Boolean */
