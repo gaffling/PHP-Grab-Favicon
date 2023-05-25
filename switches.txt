@@ -1,10 +1,8 @@
-Complete List of Switches:
-
 Usage: get-fav.php (Switches)
 
---config=FILE               Pathname to a configuration file.
---list=FILE/LIST            Filename or a delimited list of URLs to check.
---blocklist=FILE/LIST       Filename or a delimited list of MD5 hashes to block.
+--configfile=FILE           Pathname to read for configuration.
+--list=FILE/LIST            Pathname or a delimited list of URLs to check.
+--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.
 --path=PATH                 Location to store icons (default is ./)
 
 --tryhomepage               Try homepage first, then APIs. (default is true)
@@ -15,27 +13,25 @@ Usage: get-fav.php (Switches)
 --store                     Store favicons locally. (default is true)
 --nostore                   Do not store favicons locally.
 --overwrite                 Overwrite local favicons. (default is false)
---skip                      Skip local favicons if they are already present. (default is true)
+--skip                      Skip local favicons.
+--removetld                 Remove top level domain from filename. (default is false)
+--noremovetld               Don't remove top level domain from filename.
 --consolemode               Force console output.
 --noconsolemode             Force HTML output.
 --debug                     Enable debug messages.
---help                      Show Usage. (also -?)
---version                   Show Version.
+--help                      This listing and exit.
+--version                   Show version and exit.
 
-
-API Control
-                            APIs: faviconkit, favicongrabber, google
-
+Advanced:
+--user-agent=AGENT_STRING   Customize the user agent.
+--nocurl                    Disable cURL.
+--curl-verbose              Enable cURL verbose.
+--curl-progress             Enable cURL progress bar.
 --enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.
 --disableapis=FILE/LIST     Filename or a delimited list of APIs to disable.
-
-  
-Advanced:
---nocurl                    Disable cURL
---user-agent=AGENT_STRING   Customize the user agent.
---curl-verbose              Enable cURL verbose.
---http-timeout=SECONDS      Set http/https timeout (default is 60).
---connect-timeout=SECONDS   Set timeout for connections (default is 30).
---dns-timeout=SECONDS       Set timeout for DNS lookups (default is 120 sseconds).
+--http-timeout=SECONDS      Set http timeout (default is 60).
+--connect-timeout=SECONDS   Set http connect timeout (default is 30).
+--dns-timeout=SECONDS       Set dns lookup timeout (default is 120).
 
 Lists can be separated with space, comma or semi-colon.
+Available APIs: faviconkit, favicongrabber, google

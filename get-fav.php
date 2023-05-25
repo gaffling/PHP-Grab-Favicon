@@ -16,6 +16,7 @@ Changelog:
   individual api enable/disable
   updated help
   added more timeouts for PHP base functions
+  added option to save without tld (amazon.ico instead of amazon.com.ico)
 
 TO DO:
   show number of icons being searched for at start
@@ -92,7 +93,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305241445');
+define('PROGRAM_VERSION', '202305241759');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
@@ -102,7 +103,9 @@ define('DEFAULT_STORE', true);
 define('DEFAULT_TRY_HOMEPAGE', true);
 define('DEFAULT_OVERWRITE', false);
 define('DEFAULT_ENABLE_BLOCKLIST', true);
+define('DEFAULT_REMOVE_TLD', false);
 define('DEFAULT_SIZE', 16);
+define('DEFAULT_MAXIMUM_REDIRECTS', 5);
 define('DEFAULT_LOCAL_PATH', "./");
 define('DEFAULT_HTTP_TIMEOUT', 60);
 define('DEFAULT_HTTP_CONNECT_TIMEOUT', 30);
@@ -116,6 +119,8 @@ define('RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM', 0);
 define('RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM', 600);
 define('RANGE_DNS_TIMEOUT_MINIMUM', 0);
 define('RANGE_DNS_TIMEOUT_MAXIMUM', 600);
+define('RANGE_HTTP_REDIRECTS_MINIMUM', 0);
+define('RANGE_HTTP_REDIRECTS_MAXIMUM', 50);
 
 /*  Buffers */
 define('BUFFER_SIZE', 128);
@@ -184,11 +189,13 @@ setConfiguration("curl","showprogress",false);
 setConfiguration("files","local_path",DEFAULT_LOCAL_PATH);
 setConfiguration("files","overwrite",DEFAULT_OVERWRITE);
 setConfiguration("files","store",DEFAULT_STORE);
+setConfiguration("files","remove_tld",DEFAULT_REMOVE_TLD);
 setConfiguration("http","default_useragent",DEFAULT_USER_AGENT);
 setConfiguration("http","dns_timeout",DEFAULT_DNS_TIMEOUT);
 setConfiguration("http","http_timeout",DEFAULT_HTTP_TIMEOUT);
 setConfiguration("http","http_timeout_connect",DEFAULT_HTTP_CONNECT_TIMEOUT);
 setConfiguration("http","try_homepage",DEFAULT_TRY_HOMEPAGE);
+setConfiguration("http","maximum_redirects",DEFAULT_MAXIMUM_REDIRECTS);
 setConfiguration("mode","console",getCapability("php","console"));
 
 /* Modify Configuration Depending on Other Options */
@@ -265,6 +272,8 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--nostore                   Do not store favicons locally.\n";
   echo "--overwrite                 Overwrite local favicons. (default is ". showBoolean(DEFAULT_OVERWRITE) . ")\n";
   echo "--skip                      Skip local favicons.\n";
+  echo "--removetld                 Remove top level domain from filename. (default is " . showBoolean(DEFAULT_REMOVE_TLD) . ")\n";
+  echo "--noremovetld               Don't remove top level domain from filename.\n";
   echo "--consolemode               Force console output.\n";
   echo "--noconsolemode             Force HTML output.\n";
   echo "--debug                     Enable debug messages.\n";
@@ -331,6 +340,7 @@ setConfiguration("mode","console",(isset($options['consolemode']))?$options['con
 setConfiguration("files","local_path",(isset($options['path']))?$options['path']:null,null,CONFIG_TYPE_PATH);
 setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("files","remove_tld",(isset($options['removetld']))?$options['removetld']:null,(isset($options['noremovetld']))?$options['noremovetld']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("http","try_homepage",(isset($options['tryhomepage']))?$options['tryhomepage']:null,(isset($options['onlyuseapis']))?$options['onlyuseapis']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("http","useragent",(isset($options['user-agent']))?$options['user-agent']:null,null,CONFIG_TYPE_USERAGENT);
 setConfiguration("http","http_timeout",(isset($options['http-timeout']))?$options['http-timeout']:null);
@@ -461,6 +471,7 @@ function grap_favicon($url) {
   $trySelf      = getConfiguration("http","try_homepage");
   $debug        = getConfiguration("global","debug");
   $overwrite    = getConfiguration("files","overwrite");
+  $removeTLD    = getConfiguration("files","remove_tld");
   
   $api_name = null;
   $api_url = null;
@@ -468,6 +479,8 @@ function grap_favicon($url) {
   $api_enabled = false;
   
   $filePath = null;
+  setGlobal('redirect_count',0);
+  setGlobal('redirect_url',null);
 
   if (!$consoleMode) {
     // avoid script runtime timeout
@@ -477,6 +490,7 @@ function grap_favicon($url) {
 
 	// Get the Domain from the URL
   $parsed_url = parse_url($url);
+  $core_domain = null;
   $protocol = "http";
   $domain = $url;
   $url_port = null;
@@ -495,6 +509,10 @@ function grap_favicon($url) {
     
     // Check Domain
     $domainParts = explode('.', $domain);
+    if(count($domainParts) >= 2) {
+      $core_domain = $domainParts[count($domainParts)-2];
+    }
+    
     if(count($domainParts) == 3 and $domainParts[0]!='www') {
       // With Subdomain (if not www)
       $domain = $domainParts[0].'.'.
@@ -508,7 +526,7 @@ function grap_favicon($url) {
     }
   }
 
-  writeOutput("Protocol: $protocol, Domain: $domain","<b style=".HTML_WARNING_STYLE.">Protocol</b> #".@$protocol."#<b style=".HTML_WARNING_STYLE.">;Domain</b> #".@$domain."#<br>",DEBUG_MESSAGE);
+  writeOutput("Domain: $domain, Protocol: $protocol","<b style=".HTML_WARNING_STYLE.">;Domain</b> #".@$domain."# <b style=".HTML_WARNING_STYLE.">Protocol</b> #".@$protocol."#<br>",DEBUG_MESSAGE);
 
   // If $trySelf == TRUE ONLY USE APIs
   if (isset($trySelf) && $trySelf == true) {
@@ -516,7 +534,7 @@ function grap_favicon($url) {
     // Try Direct Load
     if (empty($favicon)) {
       $favicon = addFavIconToURL($url);
-      writeOutput("Attempting Direct Load using $favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeOutput("Attempting Direct Load using '$favicon'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       $fileExtension = geticonextension($favicon,false);
       if (is_null($fileExtension)) {
         unset($favicon);
@@ -641,7 +659,11 @@ function grap_favicon($url) {
         if (is_null($fileExtension)) {
           writeOutput("Invalid File Type for $favicon","<b style=".HTML_WARNING_STYLE.">Write-File</b> #INVALID_IMAGE#<br>",DEBUG_MESSAGE);
         } else {
-          $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.'.$fileExtension);
+          if ($removeTLD && !is_null($core_domain)) {
+            $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$core_domain.'.'.$fileExtension);
+          } else {
+            $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.'.$fileExtension);
+          }
 
           //  If overwrite, delete it
           if (file_exists($filePath)) { if ($overwrite) { unlink($filePath); } }
@@ -708,9 +730,11 @@ function grap_favicon($url) {
 
 /* HELPER load use curl or file_get_contents (both with user_agent) and fopen/fread as fallback */
 function load($url) {
+  $protocol = parse_url($url,PHP_URL_SCHEME);
   writeOutput("loading: url='$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-  $previous_url = null;
-  setGlobal('redirect_url',null);
+  $previous_url = getGlobal('redirect_url');
+  $redirect = getGlobal('redirect_count');
+  if (!isset($redirect)) { $redirect = 0; }
   if (getConfiguration("curl","enabled")) {
     // cURL Method
     writeOutput("cURL: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),"<b style=".HTML_WARNING_STYLE.">cURL</b> #Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout") . "#<br>",DEBUG_MESSAGE);
@@ -727,20 +751,22 @@ function load($url) {
     $content = curl_exec($ch);
     $curl_response = curl_getinfo($ch);
     $http_code = $curl_response['http_code'];
+    $curl_url = $curl_response['url'];
     writeOutput("cURL: Return Code=$http_code for '$url'","<b style=".HTML_WARNING_STYLE.">cURL</b> #$http_code#<br>",DEBUG_MESSAGE);
-    # If redirected, handle that
-    if ($curl_response['url'] != $url) {
-      $previous_url = $url;
-      $url = $curl_response['url'];
-      writeOutput("cURL: Redirecting to '$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-      curl_setopt($ch, CURLOPT_URL, $url);
-      $content = curl_exec($ch);
-      $curl_response = curl_getinfo($ch);
-      $http_code = $curl_response['http_code'];
-      if ($http_code == 200) { setGlobal('redirect_url',$url); }
-    }
     curl_close($ch);
     unset($ch);
+    if ($http_code == 301 || $http_code == 302 || $http_code == 307 || $http_code == 308)  {
+      $redirect++;
+      if ($redirect < getConfiguration("http","maximum_redirects"))
+      {
+        writeOutput("cURL: Redirecting to '$curl_url' from '$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        setGlobal('redirect_count',$redirect);
+        setGlobal('redirect_url',$curl_url);
+        $content = load($curl_url);
+      } else {
+        writeOutput("cURL: Too many redirects ($redirect)",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      }
+    }
   } else {
     //  Non-Curl Method
     $context_options = array(
@@ -813,6 +839,7 @@ function geticonextension($url, $noFallback = false) {
 
 function addFavIconToURL($url) {
   if(strrev($url)[0]==='/') {
+    // Already has slash
   } else {
     $url .= "/";
   }
@@ -1145,9 +1172,11 @@ function validateConfiguration() {
   validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
   validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","remove_tld",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
   validateConfigurationSetting("http","http_timeout",CONFIG_TYPE_NUMERIC,RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM);
   validateConfigurationSetting("http","http_timeout_connect",CONFIG_TYPE_NUMERIC,RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","maximum_redirects",CONFIG_TYPE_NUMERIC,RANGE_HTTP_REDIRECTS_MINIMUM,RANGE_HTTP_REDIRECTS_MAXIMUM);
   validateConfigurationSetting("http","try_homepage",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
 
