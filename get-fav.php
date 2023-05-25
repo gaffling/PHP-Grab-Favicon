@@ -93,7 +93,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305241803');
+define('PROGRAM_VERSION', '202305242119');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
@@ -110,6 +110,7 @@ define('DEFAULT_LOCAL_PATH', "./");
 define('DEFAULT_HTTP_TIMEOUT', 60);
 define('DEFAULT_HTTP_CONNECT_TIMEOUT', 30);
 define('DEFAULT_DNS_TIMEOUT', 120);
+define('DEFAULT_API_DATABASE', "get-fav-api.ini");
 define('DEFAULT_USER_AGENT', "FaviconBot/1.0/");
 
 /*  Ranges */
@@ -121,6 +122,8 @@ define('RANGE_DNS_TIMEOUT_MINIMUM', 0);
 define('RANGE_DNS_TIMEOUT_MAXIMUM', 600);
 define('RANGE_HTTP_REDIRECTS_MINIMUM', 0);
 define('RANGE_HTTP_REDIRECTS_MAXIMUM', 50);
+define('RANGE_ICON_SIZE_MINIMUM', 16);
+define('RANGE_ICON_SIZE_MAXIMUM', 512);
 
 /*  Buffers */
 define('BUFFER_SIZE', 128);
@@ -152,14 +155,25 @@ $apiList = array();
 $configuration = array();
 $capabilities = array();
 
+$numberOfIconsToFetch = 0;
+$numberOfIconsFetched = 0;
+
+if (file_exists(DEFAULT_API_DATABASE)) {
+  $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
+  setConfiguration("global","api_list",DEFAULT_API_DATABASE);
+}
+
 /*
 **  Load APIs
 **  addAPI($name,$url,$json,$enabled,$json_structure())
 */
 
-addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/16",false,DEFAULT_ENABLE_APIS);
-addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons","0","src"));
-addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
+if (empty($apiList)) {
+  addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/<SIZE>",false,DEFAULT_ENABLE_APIS);
+  addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons","0","src"));
+  addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
+  setConfiguration("global","api_list","internal");
+}
 
 $display_API_list = getAPIList();
 if (is_null($display_API_list)) { $display_API_list = "none"; }
@@ -183,6 +197,7 @@ addCapability("php","get",function_exists('file_get_contents'));
 setConfiguration("global","debug",false);
 setConfiguration("global","api",DEFAULT_ENABLE_APIS);
 setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
+setConfiguration("global","icon_size",DEFAULT_SIZE);
 setConfiguration("curl","enabled",getCapability("php","curl"));
 setConfiguration("curl","verbose",false);
 setConfiguration("curl","showprogress",false);
@@ -294,7 +309,7 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--dns-timeout=SECONDS       Set dns lookup timeout (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
   echo "\n";
   echo "Lists can be separated with space, comma or semi-colon.\n";
-  echo "Available APIs: $display_API_list\n";
+  echo "Available APIs: $display_API_list (" . getConfiguration("global","api_list","internal") . ")\n";
   exit;
 }
 
@@ -445,6 +460,12 @@ if (empty($URLList)) {
 /*  Set PHP User Agent/Timeouts if Required */
 initializePHPAgent();
 
+if (!empty($URLList)) {
+  $numberOfIconsToFetch = count($URLList);
+}
+
+writeOutput("Looking for $numberOfIconsToFetch Icons",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+
 /*  Process List */
 foreach ($URLList as $url) {
   $favicons[] = grap_favicon($url);
@@ -452,8 +473,11 @@ foreach ($URLList as $url) {
 
 /*  Show Results */
 foreach ($favicons as $favicon) {
+  $numberOfIconsFetched++;
   if (!empty($favicon)) { writeOutput("Icon: $favicon","<img title=\"$favicon\" style=\"width:32px;padding-right:32px;\" src=\"$favicon\">"); }
 }
+
+writeOutput("Found for $numberOfIconsFetched Icons / $numberOfIconsToFetch Requested",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
 
 /*  Show Runtime */
 writeOutput("\nRuntime: ".round(microtime(true)-$time_start,2)." second(s)","<br><br><tt>Runtime: ".round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2)." second(s)</tt>");
@@ -474,6 +498,7 @@ function grap_favicon($url) {
   $debug        = getConfiguration("global","debug");
   $overwrite    = getConfiguration("files","overwrite");
   $removeTLD    = getConfiguration("files","remove_tld");
+  $iconSize     = getConfiguration("global","icon_size");
   
   $api_name = null;
   $api_url = null;
@@ -609,7 +634,7 @@ function grap_favicon($url) {
         
         if ($api_enabled) {
           writeOutput("Using API: $api_name",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-          $favicon = getAPIurl($api_url,$domain,DEFAULT_SIZE);
+          $favicon = getAPIurl($api_url,$domain,$iconSize);
           if ($api_json) {
             $echo = json_decode(load($favicon),true);
             if (!is_null($echo)) {
@@ -1169,6 +1194,7 @@ function validateConfiguration() {
   validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","icon_size",CONFIG_TYPE_NUMERIC,RANGE_ICON_SIZE_MINIMUM,RANGE_ICON_SIZE_MAXIMUM);
   validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
   validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
