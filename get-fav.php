@@ -16,7 +16,7 @@ Changelog:
   individual api enable/disable
   updated help
   added more timeouts for PHP base functions
-  added option to save without tld (amazon.ico instead of amazon.com.ico)
+  added option to save without tld (amazon.ico instead of amazon.com.ico) (needs testing)
 
 TO DO:
   show number of icons being searched for at start
@@ -93,7 +93,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305241759');
+define('PROGRAM_VERSION', '202305241803');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
@@ -235,6 +235,8 @@ $longopts  = array(
   "nostore",
   "save",
   "nosave",
+  "removetld",
+  "noremovetld",
   "overwrite",
   "nooverwrite",
   "skip",
