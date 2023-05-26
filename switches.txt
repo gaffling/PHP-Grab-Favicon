@@ -1,8 +1,12 @@
 Usage: get-fav.php (Switches)
 
+Available APIs: faviconkit, favicongrabber, google (get-fav-api.ini)
+Lists can be separated with space, comma or semi-colon.
+
 --configfile=FILE           Pathname to read for configuration.
 --list=FILE/LIST            Pathname or a delimited list of URLs to check.
 --blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.
+--logfile=FILE              Pathname for log file (default is get-fav.log)
 --path=PATH                 Location to store icons (default is ./)
 
 --tryhomepage               Try homepage first, then APIs. (default is true)
@@ -25,6 +29,8 @@ Usage: get-fav.php (Switches)
 Advanced:
 --user-agent=AGENT_STRING   Customize the user agent.
 --nocurl                    Disable cURL.
+--bufferhttp                Buffer http page loading (default is true)
+--nobufferhttp              Disable http page load buffering.
 --curl-verbose              Enable cURL verbose.
 --curl-progress             Enable cURL progress bar.
 --enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.
@@ -33,5 +39,11 @@ Advanced:
 --connect-timeout=SECONDS   Set http connect timeout (default is 30).
 --dns-timeout=SECONDS       Set dns lookup timeout (default is 120).
 
-Lists can be separated with space, comma or semi-colon.
-Available APIs: faviconkit, favicongrabber, google
+Logging:
+--log                       Enable debug logging. (default is false)
+--nolog                     Disable debug logging.
+--append                    Append debug log. (default is true)
+--noappend                  Always overwrite debug log.
+--timestamp                 Enable debug log timestamps. (default is true)
+--notimestamp               Do not show timestamps in debug log.
+--loglevel=NUMBER           Set debug logging level. (default is 255)

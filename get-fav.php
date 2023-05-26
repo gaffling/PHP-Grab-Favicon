@@ -25,6 +25,7 @@ Changelog:
 
 TO DO:
   add logfile events
+  add option to give a list of acceptable icon types
   blocklist of icons (for example if the apis return archive.org's icon)
     list of md5 hashes
     skipped if blocklist is empty or option is goven
@@ -97,7 +98,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305251709');
+define('PROGRAM_VERSION', '202305251719');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
@@ -298,6 +299,8 @@ $longopts  = array(
   "noremovetld",
   "overwrite",
   "nooverwrite",
+  "bufferhttp",
+  "nobufferhttp",
   "skip",
   "nocurl",
   "curl-verbose",
@@ -318,10 +321,15 @@ if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['versi
 }
 
 if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?']))) {
-  echo "Usage: $script_name (Switches)\n\n";
+  echo "Usage: $script_name (Switches)\n";
+  echo "\n";
+  echo "Available APIs: $display_API_list (" . getConfiguration("global","api_list","internal") . ")\n";
+  echo "Lists can be separated with space, comma or semi-colon.\n";
+  echo "\n";
   echo "--configfile=FILE           Pathname to read for configuration.\n";
   echo "--list=FILE/LIST            Pathname or a delimited list of URLs to check.\n";
   echo "--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.\n";
+  echo "--logfile=FILE              Pathname for log file (default is " . DEFAULT_LOG_PATHNAME . ")\n";
   echo "--path=PATH                 Location to store icons (default is " . DEFAULT_LOCAL_PATH . ")\n";
   echo "\n";
   echo "--tryhomepage               Try homepage first, then APIs. (default is " . showBoolean(DEFAULT_TRY_HOMEPAGE) . ")\n";
@@ -344,6 +352,8 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "Advanced:\n";
   echo "--user-agent=AGENT_STRING   Customize the user agent.\n";
   echo "--nocurl                    Disable cURL.\n";
+  echo "--bufferhttp                Buffer http page loading (default is " . showBoolean(DEFAULT_USE_LOAD_BUFFERING) . ")\n";
+  echo "--nobufferhttp              Disable http page load buffering.\n";
   echo "--curl-verbose              Enable cURL verbose.\n";
   echo "--curl-progress             Enable cURL progress bar.\n";
   echo "--enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.\n";
@@ -352,8 +362,14 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--connect-timeout=SECONDS   Set http connect timeout (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
   echo "--dns-timeout=SECONDS       Set dns lookup timeout (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
   echo "\n";
-  echo "Lists can be separated with space, comma or semi-colon.\n";
-  echo "Available APIs: $display_API_list (" . getConfiguration("global","api_list","internal") . ")\n";
+  echo "Logging:\n";
+  echo "--log                       Enable debug logging. (default is " . showBoolean(DEFAULT_LOG_FILE_ENABLED) . ")\n";
+  echo "--nolog                     Disable debug logging.\n";
+  echo "--append                    Append debug log. (default is " . showBoolean(DEFAULT_LOG_APPEND) . ")\n";
+  echo "--noappend                  Always overwrite debug log.\n";
+  echo "--timestamp                 Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP) . ")\n";
+  echo "--notimestamp               Do not show timestamps in debug log.\n";
+  echo "--loglevel=NUMBER           Set debug logging level. (default is " . DEFAULT_LOG_LEVEL . ")\n";
   exit;
 }
 
@@ -410,6 +426,7 @@ setConfiguration("files","local_path",(isset($options['path']))?$options['path']
 setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","remove_tld",(isset($options['removetld']))?$options['removetld']:null,(isset($options['noremovetld']))?$options['noremovetld']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("http","use_buffering",(isset($options['bufferhttp']))?$options['bufferhttp']:null,(isset($options['nobufferhttp']))?$options['nobufferhttp']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("http","try_homepage",(isset($options['tryhomepage']))?$options['tryhomepage']:null,(isset($options['onlyuseapis']))?$options['onlyuseapis']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("http","useragent",(isset($options['user-agent']))?$options['user-agent']:null,null,CONFIG_TYPE_USERAGENT);
 setConfiguration("http","http_timeout",(isset($options['http-timeout']))?$options['http-timeout']:null);
