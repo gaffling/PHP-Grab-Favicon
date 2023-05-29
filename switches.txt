@@ -1,6 +1,6 @@
 Usage: get-fav.php (Switches)
 
-Available APIs: faviconkit, favicongrabber, google (get-fav-api.ini)
+Available APIs: faviconkit, favicongrabber, google, iconhorse (get-fav-api.ini)
 Lists can be separated with space, comma or semi-colon.
 
 --configfile=FILE           Pathname to read for configuration.
@@ -8,6 +8,7 @@ Lists can be separated with space, comma or semi-colon.
 --blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.
 --logfile=FILE              Pathname for log file (default is get-fav.log)
 --path=PATH                 Location to store icons (default is ./)
+--size=NUMBER               Try to get icon size (default is 16)
 
 --tryhomepage               Try homepage first, then APIs. (default is true)
 --onlyuseapis               Only use APIs.
@@ -22,22 +23,22 @@ Lists can be separated with space, comma or semi-colon.
 --noremovetld               Don't remove top level domain from filename.
 --consolemode               Force console output.
 --noconsolemode             Force HTML output.
---debug                     Enable debug messages.
+--debug                     Enable debug mode.
 --help                      This listing and exit.
 --version                   Show version and exit.
 
 Advanced:
 --user-agent=AGENT_STRING   Customize the user agent.
 --nocurl                    Disable cURL.
---bufferhttp                Buffer http page loading (default is true)
---nobufferhttp              Disable http page load buffering.
+--bufferhttp                Buffer HTTP page loading. (default is true)
+--nobufferhttp              Disable HTTP page load buffering.
 --curl-verbose              Enable cURL verbose.
 --curl-progress             Enable cURL progress bar.
 --enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.
 --disableapis=FILE/LIST     Filename or a delimited list of APIs to disable.
---http-timeout=SECONDS      Set http timeout (default is 60).
---connect-timeout=SECONDS   Set http connect timeout (default is 30).
---dns-timeout=SECONDS       Set dns lookup timeout (default is 120).
+--http-timeout=SECONDS      Set HTTP timeout. (default is 60).
+--connect-timeout=SECONDS   Set HTTP connect timeout. (default is 30).
+--dns-timeout=SECONDS       Set DNS lookup timeout. (default is 120).
 
 Logging:
 --log                       Enable debug logging. (default is false)
@@ -47,3 +48,8 @@ Logging:
 --timestamp                 Enable debug log timestamps. (default is true)
 --notimestamp               Do not show timestamps in debug log.
 --loglevel=NUMBER           Set debug logging level. (default is 255)
+
+Console:
+--level=NUMBER              Set debug logging level. (default is 31)
+--showtimestamp             Enable debug log timestamps. (default is false)
+--hidetimestamp             Do not show timestamps in debug log.

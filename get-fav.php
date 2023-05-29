@@ -2,6 +2,12 @@
 /*
 
 Changelog:
+  add icon size switch (--size)
+  when embedding icon get proper mime type
+  add logfile events
+  unify to writeLog (there are a couple places where it needs reworking)
+  added new API to .ini file
+  debug logging creates a function stack, so function:function2:function3 shows the traversal.
   created API structure
     this should permit adding APIs in the future
   allow enable/disable individual apis
@@ -24,7 +30,7 @@ Changelog:
     append option
 
 TO DO:
-  add logfile events
+  add tenacious mode (try more than one API)
   add option to give a list of acceptable icon types
   blocklist of icons (for example if the apis return archive.org's icon)
     list of md5 hashes
@@ -36,7 +42,8 @@ TO DO:
     default will be disabled for security reasons
   save sub-folders
   more error checking
-  when embedding icon get proper mime type
+  should configuration structure be typed automatically (done at set)?
+    
   
 ISSUES:
   exif_imagetype's HTTP functions are primitive and will cause icon grabbing to fail when they shouldn't
@@ -98,7 +105,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305251719');
+define('PROGRAM_VERSION', '202305281757');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Defaults */
@@ -112,11 +119,14 @@ define('DEFAULT_REMOVE_TLD', false);
 define('DEFAULT_USE_LOAD_BUFFERING', true);
 define('DEFAULT_LOG_PATHNAME', "get-fav.log");
 define('DEFAULT_LOG_FILE_ENABLED', false);
+define('DEFAULT_LOG_CONSOLE_ENABLED', true);
 define('DEFAULT_LOG_APPEND', true);
 define('DEFAULT_LOG_SEPARATOR', str_repeat("*", 80));
-define('DEFAULT_LOG_TIMESTAMP', true);
+define('DEFAULT_LOG_TIMESTAMP_CONSOLE', false);
+define('DEFAULT_LOG_TIMESTAMP_FILE', true);
 define('DEFAULT_LOG_TIMESTAMP_FORMAT', "Y-m-d H:i:s");
-define('DEFAULT_LOG_LEVEL', 255);
+define('DEFAULT_LOG_LEVEL_FILE', 255);
+define('DEFAULT_LOG_LEVEL_CONSOLE', 31);
 define('DEFAULT_SIZE', 16);
 define('DEFAULT_MAXIMUM_REDIRECTS', 5);
 define('DEFAULT_LOCAL_PATH', "./");
@@ -152,22 +162,30 @@ define('TYPE_TRACE', 64);
 define('BUFFER_SIZE', 128);
 
 /*  HTML */
-define('HTML_WARNING_STYLE', ".HTML_WARNING_STYLE.");
+define('HTML_STYLE_ALL', "<MESSAGE>");
+define('HTML_STYLE_NOTICE', "<b style=\"color:yellow;\"><MESSAGE></b>");
+define('HTML_STYLE_WARNING', "<b style=\"color:red;\"><MESSAGE></b>");
+define('HTML_STYLE_VERBOSE', "<MESSAGE>");
+define('HTML_STYLE_ERROR', "<b style=\"color:red;\"><MESSAGE></b>");
+define('HTML_STYLE_DEBUGGING', "<b style=\"color:red;\">#<MESSAGE>#</b>");
+define('HTML_STYLE_TRACE', "<b style=\"color:red;\">#<MESSAGE>#</b>");
+define('HTML_STYLE_ICON', "<img title=\"<TITLE>\" style=\"width:32px;padding-right:32px;\" src=\"<FILE>\">");
+define('HTML_STYLE_TT', "<pre><MESSAGE></pre>");
 
 /*  Special Values */
-define('SUPPRESS_OUTPUT', "<NONE>");
 define('GOOGLE_DEFAULT_ICON_MD5', '3ca64f83fdcf25135d87e08af65e68c9');
-define('DEBUG_MESSAGE', 1);
 define('URL_PATH_FAVICON', "favicon.ico");
 
 /*  Config Types */
+define('CONFIG_TYPE_SCALAR', 0);
 define('CONFIG_TYPE_STRING', 1);
-define('CONFIG_TYPE_BOOLEAN', 2);
-define('CONFIG_TYPE_NUMERIC', 3);
-define('CONFIG_TYPE_PATH', 4);
+define('CONFIG_TYPE_PATH', 2);
+define('CONFIG_TYPE_USERAGENT', 3);
+define('CONFIG_TYPE_BOOLEAN', 4);
 define('CONFIG_TYPE_SWITCH', 5);
 define('CONFIG_TYPE_SWITCH_PAIR', 6);
-define('CONFIG_TYPE_USERAGENT', 7);
+define('CONFIG_TYPE_NUMERIC', 7);
+define('CONFIG_TYPE_NUMERIC_SIGNED', 8);
 
 /*
 **  Initialize Arrays and Flags
@@ -175,15 +193,22 @@ define('CONFIG_TYPE_USERAGENT', 7);
 $blockList = array();
 $URLList = array();
 $apiList = array();
+$internalData = array();
 $configuration = array();
 $capabilities = array();
 $lastLoad = array();
+$statistics = array();
+$functiontrace = array();
 
 $numberOfIconsToFetch = 0;
 $numberOfIconsFetched = 0;
 $flag_log_initialized = 0;
 $log_handle = null;
 
+setItem("project_name",PROJECT_NAME);
+setItem("program_name",PROGRAM_NAME);
+setItem("program_version",PROGRAM_VERSION);
+setItem("banner",getItem("project_name") . " (" .getItem("program_name") . ") v" . getItem("program_version"));
     
 if (file_exists(DEFAULT_API_DATABASE)) {
   $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
@@ -192,7 +217,7 @@ if (file_exists(DEFAULT_API_DATABASE)) {
 
 /*
 **  Load APIs
-**  addAPI($name,$url,$json,$enabled,$json_structure())
+**  addAPI($name,$url,$json,$enabled,$json_structure(),$display)
 */
 
 if (empty($apiList)) {
@@ -202,8 +227,9 @@ if (empty($apiList)) {
   setConfiguration("global","api_list","internal");
 }
 
+$display_name_API_list = getAPIList(true);
 $display_API_list = getAPIList();
-if (is_null($display_API_list)) { $display_API_list = "none"; }
+
 
 /*
 **  Determine Capabilities of PHP installation
@@ -227,6 +253,10 @@ setConfiguration("global","api",DEFAULT_ENABLE_APIS);
 setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
 setConfiguration("global","icon_size",DEFAULT_SIZE);
 setConfiguration("global","valid_types",DEFAULT_VALID_EXTENSIONS);
+setConfiguration("console","enabled",DEFAULT_LOG_CONSOLE_ENABLED);
+setConfiguration("console","level",DEFAULT_LOG_LEVEL_CONSOLE);
+setConfiguration("console","timestamp",DEFAULT_LOG_TIMESTAMP_CONSOLE);
+setConfiguration("console","timestampformat",DEFAULT_LOG_TIMESTAMP_FORMAT);
 setConfiguration("curl","enabled",getCapability("php","curl"));
 setConfiguration("curl","verbose",false);
 setConfiguration("curl","showprogress",false);
@@ -243,10 +273,10 @@ setConfiguration("http","maximum_redirects",DEFAULT_MAXIMUM_REDIRECTS);
 setConfiguration("http","use_buffering",DEFAULT_USE_LOAD_BUFFERING);
 setConfiguration("logging","append",DEFAULT_LOG_APPEND);
 setConfiguration("logging","enabled",DEFAULT_LOG_FILE_ENABLED);
-setConfiguration("logging","level",DEFAULT_LOG_LEVEL);
+setConfiguration("logging","level",DEFAULT_LOG_LEVEL_FILE);
 setConfiguration("logging","pathname",DEFAULT_LOG_PATHNAME);
 setConfiguration("logging","separator",DEFAULT_LOG_SEPARATOR);
-setConfiguration("logging","timestamp",DEFAULT_LOG_TIMESTAMP);
+setConfiguration("logging","timestamp",DEFAULT_LOG_TIMESTAMP_FILE);
 setConfiguration("logging","timestampformat",DEFAULT_LOG_TIMESTAMP_FORMAT);
 setConfiguration("mode","console",getCapability("php","console"));
 
@@ -280,6 +310,8 @@ $longopts  = array(
   "enableapis::",
   "disableapis::",
   "loglevel::",
+  "level::",
+  "size::",
   "tryhomepage",
   "onlyuseapis",
   "disableallapis",
@@ -291,6 +323,8 @@ $longopts  = array(
   "noappend",
   "timestamp",
   "notimestamp",
+  "showtimestamp",
+  "hidetimestamp",
   "store",
   "nostore",
   "save",
@@ -331,6 +365,7 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.\n";
   echo "--logfile=FILE              Pathname for log file (default is " . DEFAULT_LOG_PATHNAME . ")\n";
   echo "--path=PATH                 Location to store icons (default is " . DEFAULT_LOCAL_PATH . ")\n";
+  echo "--size=NUMBER               Try to get icon size (default is " . DEFAULT_SIZE . ")\n";
   echo "\n";
   echo "--tryhomepage               Try homepage first, then APIs. (default is " . showBoolean(DEFAULT_TRY_HOMEPAGE) . ")\n";
   echo "--onlyuseapis               Only use APIs.\n";
@@ -345,31 +380,36 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--noremovetld               Don't remove top level domain from filename.\n";
   echo "--consolemode               Force console output.\n";
   echo "--noconsolemode             Force HTML output.\n";
-  echo "--debug                     Enable debug messages.\n";
+  echo "--debug                     Enable debug mode.\n";
   echo "--help                      This listing and exit.\n";
   echo "--version                   Show version and exit.\n";
   echo "\n";
   echo "Advanced:\n";
   echo "--user-agent=AGENT_STRING   Customize the user agent.\n";
   echo "--nocurl                    Disable cURL.\n";
-  echo "--bufferhttp                Buffer http page loading (default is " . showBoolean(DEFAULT_USE_LOAD_BUFFERING) . ")\n";
-  echo "--nobufferhttp              Disable http page load buffering.\n";
+  echo "--bufferhttp                Buffer HTTP page loading. (default is " . showBoolean(DEFAULT_USE_LOAD_BUFFERING) . ")\n";
+  echo "--nobufferhttp              Disable HTTP page load buffering.\n";
   echo "--curl-verbose              Enable cURL verbose.\n";
   echo "--curl-progress             Enable cURL progress bar.\n";
   echo "--enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.\n";
   echo "--disableapis=FILE/LIST     Filename or a delimited list of APIs to disable.\n";
-  echo "--http-timeout=SECONDS      Set http timeout (default is " . DEFAULT_HTTP_TIMEOUT . ").\n";
-  echo "--connect-timeout=SECONDS   Set http connect timeout (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
-  echo "--dns-timeout=SECONDS       Set dns lookup timeout (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
+  echo "--http-timeout=SECONDS      Set HTTP timeout. (default is " . DEFAULT_HTTP_TIMEOUT . ").\n";
+  echo "--connect-timeout=SECONDS   Set HTTP connect timeout. (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
+  echo "--dns-timeout=SECONDS       Set DNS lookup timeout. (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
   echo "\n";
   echo "Logging:\n";
   echo "--log                       Enable debug logging. (default is " . showBoolean(DEFAULT_LOG_FILE_ENABLED) . ")\n";
   echo "--nolog                     Disable debug logging.\n";
   echo "--append                    Append debug log. (default is " . showBoolean(DEFAULT_LOG_APPEND) . ")\n";
   echo "--noappend                  Always overwrite debug log.\n";
-  echo "--timestamp                 Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP) . ")\n";
+  echo "--timestamp                 Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP_FILE) . ")\n";
   echo "--notimestamp               Do not show timestamps in debug log.\n";
-  echo "--loglevel=NUMBER           Set debug logging level. (default is " . DEFAULT_LOG_LEVEL . ")\n";
+  echo "--loglevel=NUMBER           Set debug logging level. (default is " . DEFAULT_LOG_LEVEL_FILE . ")\n";
+  echo "\n";
+  echo "Console:\n";
+  echo "--level=NUMBER              Set debug logging level. (default is " . DEFAULT_LOG_LEVEL_CONSOLE . ")\n";
+  echo "--showtimestamp             Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP_CONSOLE) . ")\n";
+  echo "--hidetimestamp             Do not show timestamps in debug log.\n";
   exit;
 }
 
@@ -408,39 +448,42 @@ if (isset($options['configfile'])) {
 }
 
 
-
-
 /*
 **   Process Command Line Switches
 */
  
-setConfiguration("global","debug",(isset($options['debug']))?$options['debug']:null,null,CONFIG_TYPE_SWITCH);
-setConfiguration("global","blocklist",(isset($options['enableblocklist']))?$options['enableblocklist']:null,(isset($options['disableblocklist']))?$options['disableblocklist']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("logging","append",(isset($options['append']))?$options['append']:null,(isset($options['noappend']))?$options['noappend']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("logging","enabled",(isset($options['log']))?$options['log']:null,(isset($options['nolog']))?$options['nolog']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("logging","level",(isset($options['loglevel']))?$options['loglevel']:null);
-setConfiguration("logging","pathname",(isset($options['logfile']))?$options['logfile']:null,null);
-setConfiguration("logging","timestamp",(isset($options['timestamp']))?$options['timestamp']:null,(isset($options['notimestamp']))?$options['notimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("mode","console",(isset($options['consolemode']))?$options['consolemode']:null,(isset($options['noconsolemode']))?$options['noconsolemode']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("console","level",(isset($options['level']))?$options['level']:null);
+setConfiguration("console","timestamp",(isset($options['showtimestamp']))?$options['showtimestamp']:null,(isset($options['hidetimestamp']))?$options['hidetimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("curl","verbose",(isset($options['curl-verbose']))?$options['curl-verbose']:null,null,CONFIG_TYPE_SWITCH);
+setConfiguration("curl","showprogress",(isset($options['curl-showprogress']))?$options['curl-showprogress']:null,null,CONFIG_TYPE_SWITCH);
 setConfiguration("files","local_path",(isset($options['path']))?$options['path']:null,null,CONFIG_TYPE_PATH);
 setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","remove_tld",(isset($options['removetld']))?$options['removetld']:null,(isset($options['noremovetld']))?$options['noremovetld']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("global","blocklist",(isset($options['enableblocklist']))?$options['enableblocklist']:null,(isset($options['disableblocklist']))?$options['disableblocklist']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("global","debug",(isset($options['debug']))?$options['debug']:null,null,CONFIG_TYPE_SWITCH);
+setConfiguration("global","icon_size",(isset($options['size']))?$options['size']:null);
 setConfiguration("http","use_buffering",(isset($options['bufferhttp']))?$options['bufferhttp']:null,(isset($options['nobufferhttp']))?$options['nobufferhttp']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("http","try_homepage",(isset($options['tryhomepage']))?$options['tryhomepage']:null,(isset($options['onlyuseapis']))?$options['onlyuseapis']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("http","useragent",(isset($options['user-agent']))?$options['user-agent']:null,null,CONFIG_TYPE_USERAGENT);
 setConfiguration("http","http_timeout",(isset($options['http-timeout']))?$options['http-timeout']:null);
 setConfiguration("http","http_timeout_connect",(isset($options['connect-timeout']))?$options['connect-timeout']:null);
 setConfiguration("http","dns_timeout",(isset($options['dns-timeout']))?$options['dns-timeout']:null);
-setConfiguration("curl","verbose",(isset($options['curl-verbose']))?$options['curl-verbose']:null,null,CONFIG_TYPE_SWITCH);
-setConfiguration("curl","showprogress",(isset($options['curl-showprogress']))?$options['curl-showprogress']:null,null,CONFIG_TYPE_SWITCH);
+setConfiguration("logging","append",(isset($options['append']))?$options['append']:null,(isset($options['noappend']))?$options['noappend']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("logging","enabled",(isset($options['log']))?$options['log']:null,(isset($options['nolog']))?$options['nolog']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("logging","level",(isset($options['loglevel']))?$options['loglevel']:null);
+setConfiguration("logging","pathname",(isset($options['logfile']))?$options['logfile']:null,null);
+setConfiguration("logging","timestamp",(isset($options['timestamp']))?$options['timestamp']:null,(isset($options['notimestamp']))?$options['notimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("mode","console",(isset($options['consolemode']))?$options['consolemode']:null,(isset($options['noconsolemode']))?$options['noconsolemode']:null,CONFIG_TYPE_SWITCH_PAIR);
 
 if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
 if (isset($options['disableallapis'])) { setConfiguration("global","api",false); }
 
 validateConfiguration();
 
-writeLog(PROJECT_NAME . " (" . PROGRAM_NAME . ") v" . PROGRAM_VERSION,TYPE_ALL);
+writeLog(getItem("banner"),TYPE_ALL);
+# TO DO:
+#   show log options
 writeLog("Log Enabled",TYPE_DEBUGGING);
 writeLog("Log Enabled",TYPE_TRACE);
 
@@ -503,13 +546,9 @@ if (getConfiguration("global","api")) {
 $display_API_list = getAPIList();
 if (is_null($display_API_list)) { $display_API_list = "none"; }
 
-/*  Start the Show */
-writeOutput("Debug ON",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-
 /* If test URLs is empty, setup testing list */
 if (empty($URLList)) {
   writeLog("Using Test URLs",TYPE_DEBUGGING);
-  writeOutput("No URLs provided, using test list",SUPPRESS_OUTPUT);
   $URLList = array(
     'http://aws.amazon.com',
     'http://www.apple.com',
@@ -535,12 +574,15 @@ if (empty($URLList)) {
 
 /*  Set PHP User Agent/Timeouts if Required */
 initializePHPAgent();
+addStatistic("process_counter", 0);
 
 if (!empty($URLList)) {
   $numberOfIconsToFetch = count($URLList);
+  addStatistic("fetch", $numberOfIconsToFetch);  
+  addStatistic("fetched", 0);
 }
 
-writeOutput("Looking for $numberOfIconsToFetch Icons",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+writeLog("Looking for $numberOfIconsToFetch Icons",TYPE_VERBOSE);
 
 /*  Process List */
 foreach ($URLList as $url) {
@@ -550,21 +592,32 @@ foreach ($URLList as $url) {
 /*  Show Results */
 foreach ($favicons as $favicon) {
   if (!empty($favicon)) { 
-    $numberOfIconsFetched++;
-    writeOutput("Icon: $favicon","<img title=\"$favicon\" style=\"width:32px;padding-right:32px;\" src=\"$favicon\">");
+    if (file_exists($favicon)) {
+      $numberOfIconsFetched++;
+      incrementStatistic("fetched");
+      $htmlMode = array(
+        "html_template" => HTML_STYLE_ICON,
+        "html_parameters" => array(
+          "title" => $favicon,
+          "file" => $favicon)
+      );
+      writeLog("Icon: $favicon",TYPE_VERBOSE,$htmlMode);
+    }
   }
 }
 
-writeOutput("Found $numberOfIconsFetched Icons / $numberOfIconsToFetch Requested",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-
-/*  Show Runtime */
-writeOutput("\nRuntime: ".round(microtime(true)-$time_start,2)." second(s)","<br><br><tt>Runtime: ".round((microtime(true)-$_SERVER["REQUEST_TIME_FLOAT"]),2)." second(s)</tt>");
-
+/*  Show Runtime and Statistics */
+writeLog("Found " . getStatistic("fetch") . " Icons out of " . getStatistic("fetched") . " Requested",TYPE_NOTICE);
+writeLog("Runtime: ".round(microtime(true)-$time_start,2)." second(s)",TYPE_NOTICE);
+writeLog("Processing Complete",TYPE_NOTICE);
 
 /*****************************************************
                 FUNCTIONS
 *****************************************************/
 function grap_favicon($url) {
+  incrementStatistic("process_counter");
+  debugSection("grap_favicon(" . getStatistic("process_counter") . ")");
+  
   // URL to lower case
 	$url          = strtolower($url);
   
@@ -573,7 +626,6 @@ function grap_favicon($url) {
   $save         = getConfiguration("files","store");
   $directory    = getConfiguration("files","local_path");
   $trySelf      = getConfiguration("http","try_homepage");
-  $debug        = getConfiguration("global","debug");
   $overwrite    = getConfiguration("files","overwrite");
   $removeTLD    = getConfiguration("files","remove_tld");
   $iconSize     = getConfiguration("global","icon_size");
@@ -630,8 +682,8 @@ function grap_favicon($url) {
       $domain = $url;
     }
   }
-
-  writeOutput("Domain: $domain, Protocol: $protocol","<b style=".HTML_WARNING_STYLE.">;Domain</b> #".@$domain."# <b style=".HTML_WARNING_STYLE.">Protocol</b> #".@$protocol."#<br>",DEBUG_MESSAGE);
+  
+  writeLog("Processing $url, Domain: $domain using $protocol",TYPE_DEBUGGING);
 
   // If $trySelf == TRUE ONLY USE APIs
   if (isset($trySelf) && $trySelf == true) {
@@ -639,49 +691,52 @@ function grap_favicon($url) {
     // Try Direct Load
     if (empty($favicon)) {
       $favicon = addFavIconToURL($url);
-      writeOutput("Attempting Direct Load using '$favicon'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeLog("Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
       $fileExtension = geticonextension($favicon,false);
       if (is_null($fileExtension)) {
+        writeLog("Failed Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
         unset($favicon);
-        writeOutput("Failed Direct Load",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
       }
     }
     
     if (empty($favicon)) {
       // Load Page
+      
       $html = load($url);
 
       if (empty($html)) {
-        writeOutput("No data received","<b style=".HTML_WARNING_STYLE.">No data received</b><br>",DEBUG_MESSAGE);
+        writeLog("No data received",TYPE_WARNING);
       } else {
-        writeOutput("Attempting RegEx Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
+        writeLog("Attempting RegEx Match",TYPE_DEBUGGING);
         // Find Favicon with RegEx
         $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
         if (@preg_match($regExPattern, $html, $matchTag)) {
-          writeOutput("RegEx Initial Pattern Matched\n" . print_r($matchTag,TRUE),SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("RegEx Initial Pattern Matched\n" . print_r($matchTag,true),TYPE_DEBUGGING);
           $regExPattern = '/href=(\'|\")(.*?)\1/i';
           if (isset($matchTag[1]) && @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
-            writeOutput("RegEx Secondary Pattern Matched",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+            writeLog("RegEx Secondary Pattern Matched",TYPE_DEBUGGING);
             if (isset($matchUrl[2])) {
-              writeOutput("Found Match, Building Link",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+              writeLog("Found Match, Building Link",TYPE_DEBUGGING);
               // Build Favicon Link
               $favicon = rel2abs(trim($matchUrl[2]), $protocol . '://'.$domain.'/');
-              writeOutput("Match $favicon",'<b style=".HTML_WARNING_STYLE.">Match</b> #'.@$favicon.'#<br>',DEBUG_MESSAGE);
+              writeLog("Located Icon in HTML as '$favicon'",TYPE_DEBUGGING);
+              writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
             } else {
-              writeOutput("Failed To Find Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+              writeLog("Failed To Find Match",TYPE_DEBUGGING);
             }
           } else {
-            writeOutput("RegEx Secondary Pattern Failed To Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+            writeLog("RegEx Secondary Pattern Failed To Match",TYPE_DEBUGGING);
           }
         } else {
-          writeOutput("RegEx Initial Pattern Failed To Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("RegEx Initial Pattern Failed To Match",TYPE_DEBUGGING);
         }
       }
 
       // If there is no Match: Try if there is a Favicon in the Root of the Domain
       if (empty($favicon)) {
         $favicon = addFavIconToURL($protocol . '://'.$domain);
-        writeOutput("Attempting Direct Match using $favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("Attempting Direct Match using '$favicon'",TYPE_DEBUGGING);
 
         // Try to Load Favicon
         # if ( !@getimagesize($favicon) ) {
@@ -689,8 +744,8 @@ function grap_favicon($url) {
         # Do not use getimagesize() to check that a given file is a valid image.
         $fileExtension = geticonextension($favicon,false);
         if (is_null($fileExtension)) {
+          writeLog("Failed Direct Match using '$favicon'",TYPE_DEBUGGING);
           unset($favicon);
-          writeOutput("Failed Direct Match",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
         }
       }
     } // END If $trySelf == TRUE ONLY USE APIs
@@ -699,11 +754,15 @@ function grap_favicon($url) {
   // If nothing works: Get the Favicon from API
   if ((!isset($favicon)) || (empty($favicon))) {
     $api_count = getAPICount();
+    writeLog("Falling Back to API, $api_count are defined and enabled",TYPE_DEBUGGING);
     
     if ($api_count > 0) {
-      writeOutput("Selecting API",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeLog("Selecting API",TYPE_DEBUGGING);
+      # TO DO:
+      #   tenacious mode would try more than one
       $selectAPI = getRandomAPI();
-      if (isset($selectAPI['name'])) {
+      if (!is_null($selectAPI['name'])) {
+        $api_display = $selectAPI['display'];
         $api_name = $selectAPI['name'];
         $api_url = $selectAPI['url'];
         $api_json = $selectAPI['json'];
@@ -711,28 +770,30 @@ function grap_favicon($url) {
         $api_json_structure = $selectAPI['json_structure'];
         
         if ($api_enabled) {
-          writeOutput("Using API: $api_name",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("Selected API: $api_name",TYPE_DEBUGGING);
           $favicon = getAPIurl($api_url,$domain,$iconSize);
           if ($api_json) {
             $echo = json_decode(load($favicon),true);
             if (!is_null($echo)) {
               $favicon = $echo;
               if (!empty($api_json_structure)) {
+                # TO DO:
+                # this could be better parsing
                 foreach ($api_json_structure as $element) {
                   $favicon = $favicon[$element];
                 }
               }  
             }            
           }
-          writeOutput("$api_name API Result: '$favicon'","<b style=".HTML_WARNING_STYLE.">$api_name API Result</b> #".@$favicon."#<br>",DEBUG_MESSAGE);
+          writeLog("$api_name API Request: '$favicon'",TYPE_DEBUGGING);
         } else {
-          writeOutput("Selected API ($api_name) Is Disabled!",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("Selected API ($api_name) Is Disabled!",TYPE_WARNING);
         }
       } else {
-        writeOutput("Failed To Select API",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("Failed To Select API",TYPE_WARNING);
       }
     } else {
-      writeOutput("No APIs Available",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeLog("No APIs Available",TYPE_WARNING);
     }
   } // END If nothing works: Get the Favicon from API
 
@@ -740,20 +801,20 @@ function grap_favicon($url) {
   // If Favicon should be saved
   if ((isset($save)) && ($save == TRUE)) {
     unset($content);
-    writeOutput("Attempting to load favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+    writeLog("Loading Icon To Store using '$favicon'",TYPE_DEBUGGING);
 
     //  Load Favicon
     $content = load($favicon);
     
     if (empty($content)) {
-      writeOutput("Failed to load favicon",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeLog("Failed to load favicon using '$favicon'",TYPE_DEBUGGING);
     } else {
       if (!is_null(getGlobal('redirect_url'))) { $favicon = getGlobal('redirect_url'); }
       if (!is_null($api_name)) {
         if ($api_name == "google") {
           if (md5($content) == GOOGLE_DEFAULT_ICON_MD5) {
             $domain = 'default'; // so we don't save a default icon for every domain again
-            writeOutput("Google: #use default icon#","<b style=".HTML_WARNING_STYLE.">Google</b> #use default icon#<br>",DEBUG_MESSAGE);
+            writeLog("Got Google Default Icon, Discarding",TYPE_DEBUGGING);
           }
         }
       }
@@ -762,7 +823,7 @@ function grap_favicon($url) {
       if (!empty($favicon)) {
         $fileExtension = geticonextension($favicon);
         if (is_null($fileExtension)) {
-          writeOutput("Invalid File Type for $favicon","<b style=".HTML_WARNING_STYLE.">Write-File</b> #INVALID_IMAGE#<br>",DEBUG_MESSAGE);
+          writeLog("Icon Is Not Valid, Discarding '$favicon'",TYPE_DEBUGGING);
         } else {
           if ($removeTLD && !is_null($core_domain)) {
             $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$core_domain.'.'.$fileExtension);
@@ -775,18 +836,16 @@ function grap_favicon($url) {
 
           //  If file exists, skip
           if (file_exists($filePath)) {
-            writeOutput("Skipping File $filePath","<b style=".HTML_WARNING_STYLE.">Skip-File</b> #".@$filePath."#<br>",DEBUG_MESSAGE);
+            writeLog("Skipping Storing Icon as '$filePath'",TYPE_DEBUGGING);
           } else {
             // Write
             $fh = @fopen($filePath, 'wb');
             if ($fh) {
               fwrite($fh, $content);
               fclose($fh);
-              writeOutput("Writing File $filePath","<b style=".HTML_WARNING_STYLE.">Write-File</b> #".@$filePath."#<br>",DEBUG_MESSAGE);
+              writeLog("Stored Icon as '$filePath'",TYPE_DEBUGGING);
             } else {
-              # TO DO:
-              # Error getting handle
-              writeOutput("Error Writing File $filePath","<b style=".HTML_WARNING_STYLE.">Error-Write-File</b> #".@$filePath."#<br>",DEBUG_MESSAGE);
+              writeLog("Error Storing Icon as '$filePath'",TYPE_DEBUGGING);
             }
           }
         }
@@ -798,44 +857,25 @@ function grap_favicon($url) {
   }
 
   // FOR DEBUG ONLY
-  if ($debug) {
-    // Load the Favicon from local file
-    if (!empty($filePath)) {
-      if (!getCapability("php","get")) {
-        $fh = @fopen($filePath, 'r');
-        if ($fh) {
-          while (!feof($fh)) {
-            $content .= fread($fh, BUFFER_SIZE); // Because filesize() will not work on URLS?
-          }
-          fclose($fh);
-        } else {
-          # TO DO:
-          # ERROR READING
-        }
-      } else {
-        $content = file_get_contents($filePath);
-      }
-      # TO DO:
-      #   Get proper mime type for image for HTML
-      writeOutput(geticonextension($filePath) . " format file loaded from $filePath","<b style=".HTML_WARNING_STYLE.">Image</b> <img style=\"width:32px;\" src=\"data:image/png;base64,".base64_encode($content)."\"><hr size=\"1\">",DEBUG_MESSAGE);
-    }
-  }
+  if (debugMode()) { listIcons($filePath); }
 
-  if (!$consoleMode) {
     // reset script runtime timeout
+  if (!$consoleMode) {
     set_time_limit($max_execution_time); // set it back to the old value
   }
 
-  writeOutput("* * *",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
-
+  //  End Section
+  debugSection();
+  
   // Return Favicon Url
   return $filePath;
 
 } // END MAIN Function
 
-/* HELPER load use curl or file_get_contents (both with user_agent) and fopen/fread as fallback */
-/* NOTE: Never trust content-type returned by the server */
+
+/*  Load URL */
 function load($url) {
+  debugSection("load");
   $content = null;
   $content_hash = null;
   $content_type = null;
@@ -848,6 +888,7 @@ function load($url) {
   if (!isset($redirect)) { $redirect = 0; }
   $flag_skip_loadlastresult = false;
   
+  //  If no protocol is it's probably a local file.
   if (is_null($protocol)) {
     $content = loadLocalFile($url);
   } else {
@@ -863,11 +904,10 @@ function load($url) {
   }
   
   if (is_null($content)) {
-    writeOutput("loading: url='$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+    writeLog("loading: url='$url'",TYPE_TRACE);
     if (getConfiguration("curl","enabled")) {
       $method = "curl";
-      // cURL Method
-      writeOutput("cURL: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),"<b style=".HTML_WARNING_STYLE.">cURL</b> #Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout") . "#<br>",DEBUG_MESSAGE);
+      writeLog("$method: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),TYPE_TRACE);
       $ch = curl_init($url);
       if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
       curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
@@ -885,24 +925,24 @@ function load($url) {
       $curl_url = $curl_response['url'];
       $protocol = $curl_response['scheme'];
       $protocol_id = $curl_response['protocol'];
-      writeOutput("cURL: Return Code=$http_code for '$url'","<b style=".HTML_WARNING_STYLE.">cURL</b> #$http_code#<br>",DEBUG_MESSAGE);
+      writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE);
       curl_close($ch);
       unset($ch);
+      if (is_null($content)) { writeLog("$method: No content received '$url'",TYPE_TRACE); }
       if ($http_code == 301 || $http_code == 302 || $http_code == 307 || $http_code == 308)  {
         $redirect++;
         if ($redirect < getConfiguration("http","maximum_redirects"))
         {
-          writeOutput("cURL: Redirecting to '$curl_url' from '$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("$method: Redirecting to '$curl_url' from '$url'",TYPE_TRACE);
           setGlobal('redirect_count',$redirect);
           setGlobal('redirect_url',$curl_url);
           $content = load($curl_url);
           $flag_skip_loadlastresult = true;
         } else {
-          writeOutput("cURL: Too many redirects ($redirect)",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
         }
       }
     } else {
-      //  Non-Curl Method
       $method = "stream";
       $context_options = array(
         'http' => array(
@@ -912,43 +952,51 @@ function load($url) {
       );
       $context = stream_context_create($context_options);
       if (!getCapability("php","get")) {
-        //  Fallback if file_get_contents is not available
+        writeLog("$method: attempting to load '$url'",TYPE_TRACE);
         $fh = fopen($url, 'r', false, $context);
         if ($fh) {
           $content = '';
           while (!feof($fh)) {
-            $content .= fread($fh, BUFFER_SIZE); // Because filesize() will not work on URLS?
+            $content .= fread($fh, BUFFER_SIZE);
           }
           fclose($fh);
         } else {
-          # TO DO:
-          # error getting handle
+          writeLog("Failed to open '$url'",TYPE_TRACE);
         }
       } else {
         $method = "stream/file_get_contents";
+        writeLog("$method: attempting to load '$url'",TYPE_TRACE);
         $content = @file_get_contents($url, null, $context);
-        if (!is_null($content)) {
+        if (is_null($content)) {
+          writeLog("$method: No content received '$url'",TYPE_TRACE);
+        } else {
           if (!is_null($http_response_header)) {
             $headers = implode("\n", $http_response_header);
             if (preg_match_all("/^HTTP.*\s+([0-9]+)/mi", $headers, $matches )) {
               $http_code = end($matches[1]);
             }
           }
+          if (is_null($http_code)) { writeLog("$method: Return Code=NONE for '$url'",TYPE_TRACE); } else { writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE); }
         }
       }
     }
     $content_type = getMIMEType($content);
     if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
   } else {
-    writeOutput("using buffered result for url='$url'",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+    writeLog("Using buffered result for url='$url'",TYPE_TRACE);
   }
+  debugSection();
   return $content;
 }
 
+/*  Load a Local File */
 function loadLocalFile($pathname) {
+  debugSection("loadLocalFile");
   $content = null;
   $content_type = null;
-  if (!is_null($pathname)) {
+  if (is_null($pathname)) {
+    writeLog("No pathname given",TYPE_TRACE);
+  } else {
     if (file_exists($pathname)) {
       if (!getCapability("php","get")) {
         $fh = fopen($pathname, 'r', false);
@@ -958,18 +1006,27 @@ function loadLocalFile($pathname) {
             $content .= fread($fh, BUFFER_SIZE); // Because filesize() will not work on URLS?
           }
           fclose($fh);
+        } else {
+          writeLog("Failed to open '$pathname'",TYPE_TRACE);
         }
       } else {
         $content = @file_get_contents($pathname, false);
       }
-      if (!is_null($content)) {
+      if (is_null($content)) {
+        writeLog("No content for '$pathname'",TYPE_TRACE);
+      } else {
         $content_type = getMIMEType($content);
       }
       lastLoadResult($pathname,"file",$content_type,0,"file",0,$content);
+    } else {
+      writeLog("'$pathname' does not exist",TYPE_TRACE);
     }
   }
+  debugSection();
   return $content;
 }
+
+/*  Get MIME Type based on data */
 function getMIMEType($data) {
   $content_type = null;
   if (!is_null($data)) {
@@ -978,6 +1035,27 @@ function getMIMEType($data) {
         $finfo = new finfo(FILEINFO_MIME_TYPE);
         $content_type = $finfo->buffer($data);    
       }
+    }
+  }
+  return $content_type;
+}
+
+/*  Get MIME Type from a File */
+function getMIMETypeFromFile($pathname) {
+  $content_type = null;
+  if (!is_null($pathname)) {
+    if (file_exists($pathname)) {
+      if (is_null($content_type)) {
+        if (getCapability("php","fileinfo")) {
+          $finfo = new finfo(FILEINFO_MIME_TYPE);
+          $content_type = $finfo->file($pathname);    
+        }
+      }      
+      if (is_null($content_type)) {
+        if (getCapability("php","mime_content_type")) {
+          $content_type = mime_content_type($pathname);
+        }
+      }    
     }
   }
   return $content_type;
@@ -999,6 +1077,7 @@ function rel2abs($rel, $base) {
 
 /* Get Icon Extension / Verify Icon */
 function geticonextension($url, $noFallback = false) {
+  debugSection("geticonextension");
   $retval = null;
   if (!empty($url))
   {
@@ -1009,7 +1088,7 @@ function geticonextension($url, $noFallback = false) {
         if (getCapability("php","exif")) {
           $phpUA = ini_get("user_agent");
           $timeout = ini_get("default_socket_timeout");
-          writeOutput("geticonextension(exif): url='$url', content-type: null, useragent=$phpUA, timeout=$timeout",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+          writeLog("geticonextension(exif): url='$url', content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
           $filetype = @exif_imagetype($url);
           if (!is_null($filetype)) {
             switch ($filetype) {
@@ -1038,7 +1117,7 @@ function geticonextension($url, $noFallback = false) {
           }
         }
       } else {
-        writeOutput("geticonextension: url='$url', content-type=$content_type",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("geticonextension: url='$url', content-type=$content_type",TYPE_TRACE);
         switch ($content_type) {
           case "image/x-icon":
             $retval = "ico";
@@ -1081,7 +1160,7 @@ function geticonextension($url, $noFallback = false) {
     }
     if (is_null($retval)) {
       if (!$noFallback) {
-        writeOutput("geticonextension: url='$url', attempting fallback",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("geticonextension: url='$url', attempting fallback",TYPE_TRACE);
         $extension = @preg_replace('/^.*\.([^.]+)$/D', '$1', $url);
         if (isValidType($extension)) {
           $retval = $extension;
@@ -1091,18 +1170,23 @@ function geticonextension($url, $noFallback = false) {
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Validate File Type */
 function isValidType($type) {
   $retval = false;
   $extensionList = strtolower(getConfiguration("global","valid_types"));
   $type = strtolower($type);
   if (!is_null($extensionList)) {
+    #   TO DO:
+    #     is this an extension we are allowing?
   }
   return $retval;
 }
 
+/*  Adds the favicon path to the URL */
 function addFavIconToURL($url) {
   if(strrev($url)[0]==='/') {
     // Already has slash
@@ -1114,12 +1198,14 @@ function addFavIconToURL($url) {
 }
 
 function validateicon($pathname, $removeIfInvalid = false) {
+  debugSection("validateicon");
   # TO DO
   #   determine if the pathname is:
   #     a valid image file
   #     not in the blocklist
   #
   # if it is not a valid (or is blocked) and removeIfInvalid is true, delete it.
+  debugSection();
   $retval = false;
 }
 
@@ -1182,12 +1268,24 @@ function setRange($value,$min = null,$max = null) {
 
 /*
 **  API Support Functions **
+**
+**    name      Name/ID for the API
+**    url       URL for the API
+**    json      Does API return JSON?
+**    enabled   Is API enabled?
+**    display   Display Name (cosmetic only), defaults to name
+**
+**    json_structure is an array of the expected json data turned.
+**
+**
 */
 /* Add an API */
-function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array()) {
+function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array(),$display = null) {
   global $apiList;
 
   $entry = array();
+  if (is_null($display)) { $display = $name; }
+  $entry['display'] = $display;
   $entry['name'] = $name;
   $entry['url'] = $url;
   $entry['json'] = $json;
@@ -1195,9 +1293,10 @@ function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array
   $entry['json_structure'] = $json_structure;
 
   array_push($apiList,$entry);
+  refreshAPIList();
 }
 
-function getAPIList() {
+function getAPIList($displayName = false) {
   global $apiList;
   
   $retval = null;
@@ -1205,7 +1304,11 @@ function getAPIList() {
   
   if (!empty($apiList)) {
     foreach ($apiList as $item) {
-      $api_name = $item['name'];
+      if ($displayName) {
+        $api_name = $item['display'];
+      } else {
+        $api_name = $item['name'];
+      }
       $api_enabled = $item['enabled'];
       if (!is_null($api_name)) {
         if (!is_null($retval)) {
@@ -1217,30 +1320,44 @@ function getAPIList() {
     }
   }
   
+  if (is_null($retval)) { if ($displayName) { $retval = "None"; } else { $retval = "none"; } }
+  
   return $retval;
 }
 
-function getAPICount($isenabled = true) {
+function refreshAPIList($isenabled = true) {
   global $apiList; 
-  $retval = 0;
-  
+  $count = 0;
   if (!empty($apiList)) {
     foreach ($apiList as $item) {
+      $api_display = $item['display'];
       $api_name = $item['name'];
       $api_url = $item['url'];
       $api_json = $item['json'];
       $api_enabled = $item['enabled'];
       $api_json_structure = $item['json_structure'];
-      if (isset($api_name)) {
+      if (!is_null($api_name)) {
         if ($isenabled) {
-          if ($api_enabled) { $retval++; }
+          if ($api_enabled) { $count++; }
         } else {
-          $retval++;
+          $count++;
         }
       }
     }
   }
-  return $retval;
+  setItem("api_count",$count);
+}
+
+function getAPICount($isenabled = true) {
+  
+  $api_count = getItem("api_count");
+  
+  if (!isset($api_count)) { 
+    refreshAPIList($isenabled);
+    $api_count = getItem("api_count");
+  }
+
+  return $api_count;
 }
 
 /* Return an API object */
@@ -1254,21 +1371,22 @@ function getRandomAPI() {
   
   $api_count = getAPICount();
   $return_object = array();
-  $return_object['name'] = "";
-  $return_object['url'] = "";
+  $return_object['name'] = null;
+  $return_object['display'] = null;
+  $return_object['url'] = null;
   $return_object['json'] = false;
   $return_object['enabled'] = false;
   $return_object['json_structure'] = array();
   
+  $flag_selecting = true;
+  
   if ($api_count > 0) {
-    $counter = 0;
-    foreach ($apiList as $item) {
-      $counter++;
-      if ($item['enabled'] === true) {
-        if ((rand(1,100) > rand(25, 75)) || ($counter == $api_count))
-        {
-          $return_object = $item;
-          break;
+    while ($flag_selecting) {
+      $api_name = array_rand($apiList,1);
+      $return_object = getAPI($api_name);
+      if (!is_null($return_object['name'])) {
+        if ($return_object['enabled']) {
+          $flag_selecting = false;
         }
       }
     }
@@ -1281,47 +1399,166 @@ function lookupAPI($element,$value) {
   global $apiList;
 
   $return_object = array();
-  $return_object['name'] = "";
-  $return_object['url'] = "";
+  $return_object['display'] = null;
+  $return_object['name'] = null;
+  $return_object['url'] = null;
   $return_object['json'] = false;
   $return_object['enabled'] = false;
   $return_object['json_structure'] = array();
   
   foreach ($apiList as $item) {
-    if (strcasecmp($item[$element], $value) == 0) {
-      $return_object = array();
-      $return_object = $item;
-      break;
+    if (!is_null($item['name'])) {
+      if (strcasecmp($item[$element], $value) == 0) {
+        $return_object = array();
+        $return_object = $item;
+        break;
+      }
     }
   }
   return $return_object;
 }
 
-function getAPIurl($url,$domain,$size = 16) {
+/*  Populate API URL */
+function getAPIurl($url,$domain,$size = 0) {
+  if ($size == 0) { $size = getConfiguration("global","icon_size"); }
+  
   $processed_url = $url;
   $processed_url = str_replace("<DOMAIN>",$domain,$processed_url);
   $processed_url = str_replace("<SIZE>",$size,$processed_url);
   return $processed_url;
 }
 
-/*  Output Function */
-function writeOutput($text,$html = null,$type = 0) {
-  $debug = getConfiguration("global","debug");
-  $consoleMode = getConfiguration("mode","console");
-  
-  $flag_display = true;
-  if (is_null($html)) { if ($text != SUPPRESS_OUTPUT) { $html = $text . "<br>"; } }
-  if (($type == DEBUG_MESSAGE) && (!$debug)) { $flag_display = false; }
-  if ($flag_display) {
-    if ($consoleMode) {
-      if ($text != SUPPRESS_OUTPUT) { echo "$text\n"; }
+/*  Render HTML */
+/*
+**  Style is a string template.
+**  Parameters is an array or a string.  if a string then 'message' is assumed.
+**    message: Substitute <MESSAGE>
+**    title:   Substitute <TITLE>
+**    file:    Substitute <FILE>
+*/
+
+function renderHTML($style = null,$parameters = null) {
+  $html = null;
+  $message = null;
+  $title = null;
+  $file = null;
+  if (!is_null($parameters)) {
+    if (is_array($parameters)) {
+      if (isset($parameters['message'])) {
+        $message = $parameters['message'];
+      }
+      if (isset($parameters['title'])) {
+        $title = $parameters['title'];
+      }
+      if (isset($parameters['file'])) {
+        $file = $parameters['file'];
+      }
     } else {
-      if ($html != SUPPRESS_OUTPUT) { print($html ."\n"); }
+      $message = $parameters;
+    }
+    if (is_null($style)) {
+      if (!is_null($message)) { $html = $message . "<br>"; }
+    } else {
+      $html = $style;
+      if (!is_null($message)) { $html = str_replace("<MESSAGE>",$message,$html); }
+      if (!is_null($title)) { $html = str_replace("<TITLE>",$title,$html); }
+      if (!is_null($file)) { $html = str_replace("<FILE>",$file,$html); }
     }
   }
-  return $flag_display;
+  return $html;
 }
 
+/*  List Icons with Base64 Encoding in HTML Mode */
+function listIcons($filePath) {
+  debugSection("listIcons");
+  $consoleMode = getConfiguration("mode","console");    
+  $html_mode = array();
+  if (is_null($filePath)) {
+    writeLog("No pathname given",TYPE_TRACE);
+  } else {
+    if (file_exists($filePath)) {
+      $mimetype = getMIMETypeFromFile($filePath);
+      if (is_null($mimetype)) {
+        writeLog("Could not determine mimetype for '$filePath'",TYPE_ERROR);
+      } else {
+        if (!$consoleMode) {
+          $encodedContent = getFileAsBase64($filePath);
+          if (is_null($encodedContent)) {
+            writeLog("Error loading '$filePath'",TYPE_ERROR);
+          } else {
+            $html = renderHTML(HTML_STYLE_WARNING,"Image");
+            $html .= "<img style=\"width:32px;\" src=\"data:" . $mimetype . ";base64," . $encodedContent . "\>";
+            $html .= "<hr size=\"1\">";
+          }
+          $html_mode = array(
+            "html_output" => $html,
+          );          
+        }
+        writeLog("'$mimetype' format file loaded from '$filePath'",TYPE_ALL,$html_mode);
+      }  
+    } else {
+      writeLog("'$filePath' does not exist",TYPE_TRACE);
+    }
+  }
+  debugSection();
+}
+
+/*  Load a File and Encode it in Base64 */
+function getFileAsBase64($filePath) {
+  debugSection("getFileAsBase64");
+  $retval = null;
+  if (is_null($filePath)) {
+    writeLog("No pathname given",TYPE_TRACE);
+  } else {
+    if (file_exists($filePath)) {
+      $content = null;
+      if (!getCapability("php","get")) {
+        $fh = @fopen($filePath, 'r');
+        if ($fh) {
+          while (!feof($fh)) {
+            $content .= fread($fh, BUFFER_SIZE);
+          }
+          fclose($fh);
+        } else {
+          writeLog("Failed to open '$filePath'",TYPE_TRACE);
+        }
+      } else {
+        $content = file_get_contents($filePath);
+      }
+      if (is_null($content)) {
+        writeLog("No content for '$filePath'",TYPE_TRACE);
+      } else {
+        $retval = base64_encode($content); 
+      }
+    } else {
+      writeLog("'$filePath' does not exist",TYPE_TRACE);
+    }
+  } 
+  debugSection();
+  return $retval;  
+}
+
+/*  See if the script is in Debug mode */
+function debugMode() {
+  $retval = false;
+  $log_enabled = getConfiguration("logging","enabled");
+  $log_level = getConfiguration("logging","level");
+  $console_enabled = getConfiguration("console","enabled");
+  $console_level = getConfiguration("console","level");
+  $debug = getConfiguration("global","debug");
+  if ($debug) { $retval = true; }
+  if ($log_enabled) {
+    if ($log_level & TYPE_DEBUGGING) { $retval = true; }
+    if ($log_level & TYPE_TRACE) { $retval = true; }
+  }
+  if ($console_enabled) {
+    if ($console_level & TYPE_DEBUGGING) { $retval = true; }
+    if ($console_level & TYPE_TRACE) { $retval = true; }
+  }
+}
+
+/*  Initialize Log File */
+/*  Also acts to see if logging (console and/or file) is enabled */
 function initializeLogFile() {
   $retval = false;
   $log_enabled = getConfiguration("logging","enabled");
@@ -1359,55 +1596,196 @@ function initializeLogFile() {
           if ($log_write_separator) {
             if (fwrite($log_handle, "$log_separator\n") === false) {
               setConfiguration("logging","enabled",false);
-              $retval = false;
             } 
           }
         }
       }
     }
   }
+  if (getConfiguration("logging","enabled")) { $retval = true; }
+  if (getConfiguration("console","enabled")) { $retval = true; }
   return $retval;
 }
 
-function writeLog($message,$type = TYPE_ALL) {
+/*  Write Log File */
+/*
+**  Message:  Output Text
+**  Type:     Level
+**  Special:  Array
+**
+**    Special is an array and provides overrides
+**      html_template = renderHTML template
+**      html_output = don't render output, use this string
+**      html_parameters = array to give to renderHTML
+**      no_html = suppress any HTML output for this message
+**      no_file = suppress any logfile output for this message
+**      no_console = suppress console output for this message
+**
+**/
+function writeLog($message = null,$type = TYPE_ALL,$special = array()) {
   if (initializeLogFile()) {
+    $console_enabled = getConfiguration("console","enabled");
+    $console_level = getConfiguration("console","level");
+    $console_opt_timestamp = getConfiguration("console","timestamp");
+    $console_opt_timestamp_format = getConfiguration("console","timestampformat");
+    $log_enabled = getConfiguration("logging","enabled");
     $log_level = getConfiguration("logging","level");
     $log_opt_timestamp = getConfiguration("logging","timestamp");
     $log_opt_timestamp_format = getConfiguration("logging","timestampformat");
     $log_handle = getGlobal("log_handle");
+    $debug_section = getGlobal("debug_section");
+    $consoleMode = getConfiguration("mode","console");      
     
-    if ($log_level & $type) {
-      $now = time();
-      $string_timestamp = null;
-      if ($log_opt_timestamp) {
-        if (!is_null($log_opt_timestamp_format)) { $string_timestamp = date($log_opt_timestamp_format,$now);}
+    $flag_write_console = false;
+    $flag_write_file = false;
+    
+    $string_module_file = null;
+    $string_module_console = null;
+    $string_timestamp_file = null;
+    $string_timestamp_console = null;
+
+    $html_parameters = array();
+    $html_override = null;
+    $flag_nohtml = false;
+    $flag_nofile = false;
+    $flag_noconsole = false;
+    $end_line = null;
+    $string_type = null;
+    
+    $now = time();
+    
+    //  Determine Prefix and/or HTML style
+    if ($type & TYPE_ALL)
+    {
+      $html_style = HTML_STYLE_ALL;
+    }
+    if ($type & TYPE_NOTICE)
+    {
+      $html_style = HTML_STYLE_NOTICE;
+    }
+    if ($type & TYPE_WARNING)
+    {
+      $string_type = "[WARNING] ";
+      $html_style = HTML_STYLE_WARNING;
+    }
+    if ($type & TYPE_VERBOSE)
+    {
+      $html_style = HTML_STYLE_VERBOSE;
+    }
+    if ($type & TYPE_ERROR)
+    {
+      $string_type = "[ERROR] ";
+      $html_style = HTML_STYLE_ERROR;
+    }
+    if ($type & TYPE_DEBUGGING)
+    {
+      $string_type = "[DEBUG] ";
+      $html_style = HTML_STYLE_DEBUGGING;
+    }
+    if ($type & TYPE_TRACE)
+    {
+      $string_type = "[TRACE] ";
+      $html_style = HTML_STYLE_TRACE;
+    }
+
+    //  Process special directives
+    if (!empty($special)) {
+      if (isset($special['html_template'])) { $html_style = $special['html_template']; }
+      if (isset($special['html_output'])) { $html_override = $special['html_output']; }
+      if (isset($special['no_html'])) { $flag_nohtml = true; }
+      if (isset($special['no_file'])) { $flag_nofile = true; }
+      if (isset($special['no_console'])) { $flag_noconsole = true; }
+      if (isset($special['html_parameters'])) { $html_parameters = $special['html_parameters']; }
+    }
+
+    //  Log File Preparation
+    if ($log_enabled) {
+      if ($log_level & $type) {
+        $file_string_timestamp = null;
+        if ($log_opt_timestamp) {
+          if (!is_null($log_opt_timestamp_format)) { $file_string_timestamp = date($log_opt_timestamp_format,$now);}
+        }
+        if (!is_null($message)) {
+          $flag_write_file = true;
+        }
       }
-      $string_type = null;
-      if ($type & TYPE_WARNING)
-      {
-        $string_type = "[WARNING] ";
+    }
+
+    //  Console Preparation
+    if ($console_enabled) {
+      if ($console_level & $type) {
+        $console_string_timestamp = null;
+        if ($console_opt_timestamp) {
+          if (!is_null($console_opt_timestamp_format)) { $console_string_timestamp = date($console_opt_timestamp_format,$now);}
+        }
+        $flag_write_console = true;
       }
-      if ($type & TYPE_ERROR)
-      {
-        $string_type = "[ERROR] ";
-      }
-      if ($type & TYPE_DEBUGGING)
-      {
-        $string_type = "[DEBUG] ";
-      }
-      if ($type & TYPE_TRACE)
-      {
-        $string_type = "[TRACE] ";
-      }
+    }    
+ 
+    // Process Special Directives
+    if ($flag_write_file) {
+      if ($flag_nofile) { $flag_write_file = false; }
+    }
+    if ($flag_write_console) { 
+      if ($flag_noconsole) { if ($consoleMode) { $flag_write_console = false; } }
+      if ($flag_nohtml) { if (!$consoleMode) { $flag_write_console = false; } }
+    }    
+    
+    //  Write Log File
+    if ($flag_write_file) {
       $string_file_line = $message;
+      if (!is_null($debug_section)) { $string_file_line = "[" . $debug_section . "] " . $string_file_line; }
       if (!is_null($string_type)) { $string_file_line = $string_type . $string_file_line; }
-      if (!is_null($string_timestamp)) { $string_file_line = $string_timestamp . " " . $string_file_line; }
-      
+      if (!is_null($file_string_timestamp)) { $string_file_line = $file_string_timestamp . " " . $string_file_line; }
       if (!is_null($log_handle)) {
         if (fwrite($log_handle, "$string_file_line\n") === false) {
           setConfiguration("logging","enabled",false);
         }
+      }        
+    }
+
+    //  Write Console/HTML
+    if ($flag_write_console) {
+      $string_console_line = $message;
+      if ($consoleMode) {
+        if (!is_null($debug_section)) { $string_console_line = "[" . $debug_section . "] " . $string_console_line; }
+        if (!is_null($string_type)) { $string_console_line = $string_type . $string_console_line; }
+        if (!is_null($console_string_timestamp)) { $string_console_line = $console_string_timestamp . " " . $string_console_line; }
+      } else {
+        if (!is_null($html_override)) {
+          $string_console_line = $html_override;
+        } else {
+          if (!is_null($debug_section)) { $string_console_line = "[" . renderHTML(HTML_STYLE_TT,$debug_section) . "] " . $string_console_line; }
+          if (!is_null($string_type)) { $string_console_line = $string_type . $string_console_line; }
+          if (!is_null($console_string_timestamp)) { $string_console_line = renderHTML(HTML_STYLE_TT,$console_string_timestamp) . " " . $string_console_line; }
+          if (!isset($html_parameters['message'])) { $html_parameters['message'] = $string_console_line; }
+          $string_console_line = renderHTML($html_style,$html_parameters);
+        }
+        $end_line = "<br>";
       }
+      echo $string_console_line;
+      if (!is_null($end_line)) { echo $end_line; }
+      echo "\n";
+    }
+  }
+}
+
+/*  Debug Section Stack */
+function debugSection($section = null) {
+  global $functiontrace;
+  
+  if (is_null($section)) {
+    array_pop($functiontrace);
+  } else {
+    array_push($functiontrace,$section);
+  }
+  if (empty($functiontrace)) {
+    setGlobal("debug_section",null);
+  } else {
+    if (count($functiontrace) > 1) {
+      setGlobal("debug_section",implode(":",$functiontrace));
+    } else {
+      setGlobal("debug_section",end($functiontrace));
     }
   }
 }
@@ -1416,7 +1794,7 @@ function writeLog($message,$type = TYPE_ALL) {
 **  Configuration Controller
 **
 */
-function setConfiguration($scope = "global",$option,$value = null,$default = null,$type = 0) {
+function setConfiguration($scope = "global",$option,$value = null,$default = null,$type = CONFIG_TYPE_SCALAR) {
   global $configuration;
   $flag_fallback = true;
   $flag_handled = false;
@@ -1489,7 +1867,7 @@ function validateConfigurationSetting($scope = "global",$option,$type = 0,$min =
   if (isset($configuration[$scope][$option])) {
     $value = $configuration[$scope][$option];
     switch ($type) {
-      case CONFIG_TYPE_PATH:
+      case CONFIG_TYPE_PATH:            /* Validate Path */
         if (isset($value)) {
           if (!file_exists($value)) {
             $value = null;
@@ -1516,14 +1894,17 @@ function validateConfigurationSetting($scope = "global",$option,$type = 0,$min =
   }
 }
 
+/*  Validate Configuration */
 function validateConfiguration() {
-  # Ensure that booleans are properly typed
-  # Ensure numerics are numeric and in proper ranges
+  debugSection("validateConfiguration");
   
   validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","icon_size",CONFIG_TYPE_NUMERIC,RANGE_ICON_SIZE_MINIMUM,RANGE_ICON_SIZE_MAXIMUM);
+  validateConfigurationSetting("console","enabled",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE);
+  validateConfigurationSetting("console","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
   validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
@@ -1544,12 +1925,12 @@ function validateConfiguration() {
   
   if (getConfiguration("logging","enabled")) {
     if (is_null(getConfiguration("logging","pathname"))) {
-      writeOutput("validateConfiguration: pathname is not set, disabling logging option",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeLog("validateConfiguration: pathname is not set, disabling logging option",TYPE_TRACE);
       setConfiguration("logging","enabled",false);
     }
     if (getConfiguration("logging","timestamp")) {
       if (is_null(getConfiguration("logging","timestampformat"))) {
-        writeOutput("validateConfiguration: timestampformat is not set, disabling logging timestamp",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("validateConfiguration: timestampformat is not set, disabling logging timestamp",TYPE_TRACE);
         setConfiguration("logging","timestamp",false);
       }
     }
@@ -1559,14 +1940,23 @@ function validateConfiguration() {
       }
     }
   }
+
+  if (getConfiguration("console","enabled")) {
+    if (getConfiguration("console","timestamp")) {
+      if (is_null(getConfiguration("console","timestampformat"))) {
+        writeLog("validateConfiguration: timestampformat is not set, disabling console timestamp",TYPE_TRACE);
+        setConfiguration("console","timestamp",false);
+      }
+    }
+  }
     
   if (getConfiguration("files","store")) {
     if (is_null(getConfiguration("files","local_path"))) {
-        writeOutput("validateConfiguration: local_path is not set, disabling store option",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("validateConfiguration: local_path is not set, disabling store option",TYPE_TRACE);
         setConfiguration("files","store",false);
     } else {
       if (!file_exists(getConfiguration("files","local_path"))) {
-        writeOutput("validateConfiguration: local_path is invalid, disabling store option",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+        writeLog("validateConfiguration: local_path is invalid, disabling store option",TYPE_TRACE);
         setConfiguration("files","store",false);
       }
     }
@@ -1574,17 +1964,16 @@ function validateConfiguration() {
   
   if (getConfiguration("curl","enabled")) {
     if (!getCapability("php","curl")) {
-      writeOutput("validateConfiguration: curl is enabled but not supported, disabling",SUPPRESS_OUTPUT,DEBUG_MESSAGE);
+      writeLog("validateConfiguration: curl is enabled but not supported, disabling",TYPE_TRACE);
       setConfiguration("curl","enabled",false);
     }
   }
-  
+  debugSection();
 }
 
 /*
 ** Capability Controller
 */
-
 function addCapability($scope = "global", $capability,$value = false) {
   global $capabilities;
   
@@ -1641,6 +2030,68 @@ function loadList($list) {
       }
     }
   }
+  return $retval;
+}
+
+/*
+**  Internal Data Controller
+*/
+function setItem($name,$value = null) {
+  global $internalData;
+ 
+  $internalData[$name] = $value;
+}
+
+function getItem($name,$value = null) {
+  global $internalData;
+
+  if (isset($internalData[$name])) { $value = $internalData[$name]; } else { $value = null; }
+  
+  return $value;
+}
+
+/*
+**  Statistics Controller
+*/
+function addStatistic($name,$value = null) {
+  global $statistics;
+  
+  if (is_null($value)) { $statistics[$name] = 0; } else { $statistics[$name] = $value; }
+}
+
+function updateStatistic($name,$value) {
+  global $statistics;
+  
+  if (isset($statistics[$name])) {
+    if (!is_null($value)) { $statistics[$name] = $value; }
+  }
+}
+
+function incrementStatistic($name,$value = 1) {
+  global $statistics;
+  
+  if (isset($statistics[$name])) {
+    if (!is_null($value)) { $statistics[$name] += $value; }
+  }
+}
+
+function decrementStatistic($name,$value = 1) {
+  global $statistics;
+  
+  if (isset($statistics[$name])) {
+    if (!is_null($value)) { $statistics[$name] -= $value; }
+  }
+}
+
+function getStatistic($name) {
+  global $statistics;
+  
+  $retval = 0;
+  
+  if (isset($statistics[$name])) {
+    $retval = $statistics[$name];
+  }
+  
   return $retval;
 }
 
