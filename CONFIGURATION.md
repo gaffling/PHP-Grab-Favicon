@@ -1,3 +1,17 @@
+About
+-----
+
+There are two ways to configure `get-fav.php`, you can use an .ini file or pass command line switches.
+You can even use both, the switches will always override the configuration file.
+
+
+Configuration File
+-------------------
+
+Command Line Switches
+---------------------
+
+
 # Configuration Settings
 
 ## global
