@@ -18,26 +18,26 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Boolean
 	Description: Controls debug modes
 	Default: false
-	Switch: `--debug`
-	NOTE: This does not control debug logging, see the *console* and *logging* sections for that.
+	Switch: --debug
+  NOTE: This does not control debug logging, see the CONSOLE and LOGGING sections for that.
 
 ### api 
 	Type: Boolean
 	Description: Master switch for using APIs to get favicons
 	Default: true
-	Switch: `--disableallapis`
+	Switch: --disableallapis
   
 ### blocklist
 	Type: Boolean
 	Description: Master switch to enable using blocklists
 	Default: true
-	Switch: `--enableblocklist`, `--disableblocklist`
+	Switch: --enableblocklist, --disableblocklist
 
 ### icon_size
 	Type: Numeric
 	Description: Try to get this size of icons (some APIs only)
 	Default: 32
-	Switch: `--size=N`
+	Switch: --size=N
 
 ## console
 
@@ -51,18 +51,18 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Numeric
 	Description: Log Level
 	Default: 31 (NOTICES, WARNINGS, VERBOSE, ERRORS)
-	Switch: `--level=N`
+	Switch: --level=N
   
 ### timestamp
 	Type: Boolean
 	Description: Display timestamps
 	Default: false
-	Switch: `--showtimestamp`, `--hidetimestamp`
+	Switch: --showtimestamp, --hidetimestamp
   
 ### timestampformat
 	Type: String
 	Description: Formatting for timestamps.
-	Default: `"Y-m-d H:i:s"`
+	Default: "Y-m-d H:i:s"
 	Switch: None
 	NOTE: For a complete list of formatting options, please consult https://www.php.net/manual/en/datetime.format.php
   
@@ -72,74 +72,74 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Boolean
 	Description: If set to true, the software will use cURL
 	Default: true (if curl support is detected)
-	Switch: `--nocurl`
+	Switch: --nocurl
 
 ### verbose
 	Type: Boolean
-	Description: Used for `CURLOPT_VERBOSE` option
+	Description: Used for CURLOPT_VERBOSE option
 	Default: false
-	Switch: `--curl-verbose`
+	Switch: --curl-verbose
 
 ### showprogress
 	Type: Boolean
-  Description: If true, `CURLOPT_NOPROGRESS` is set to false
+	Description: If true, CURLOPT_NOPROGRESS is set to false
 	Default: false
-	Switch: `--curl-showprogress`
+	Switch: --curl-showprogress
 
 ## files
   
 ### local_path
 	Type: String
 	Description: Relative or absolute path for storing icons
-	Default: `./`
-	Switch: `--path="<PATH>"` (Alias: `-p`)
+	Default: ./
+	Switch: --path="<PATH>" (Alias: -p)
   
 ### overwrite
 	Type: Boolean
 	Description: If true, any saved icons will be overwritten
 	Default: false
-	Switch: `--overwrite`, `--nooverwrite` (Alias: `--skip`)
+	Switch: --overwrite, --nooverwrite (Alias: --skip)
   
 ### store
 	Type: Boolean
-	Description: If true icons will be saved in `local_path`
+	Description: If true icons will be saved in local_path
 	Default: true
-	Switch: `--store`, `--nostore` (Alias: `--save`, `--nosave`)
+	Switch: --store, --nostore (Alias: --save, --nosave)
   
 ### remove_told
 	Type: Boolean
 	Description: Remove top level domain (.e.g ".com") when saving icons.
 	Default: false
-	Switch: `--removetld`, `--noremovetld`
+	Switch: --removetld, --noremovetld
   
 ## http
   
 ### default_useragent
 	Type: String
 	Description: Default useragent
-	Default: `FaviconBot/1.0/`
+	Default: FaviconBot/1.0/
 	Switch: None
-	NOTE: Generally this should not be changed, you want *useragent* instead.
+	NOTE: Generally this should not be changed, you want USERAGENT instead.
   
 ### dns_timeout
 	Type: Integer
 	Description: Number of seconds before DNS lookups timeout. (0 - 600).
 	Default: 120
-	Switch: `--dns-timeout=N`
+	Switch: --dns-timeout=N
 	NOTE: Setting this to 0 can cause an infinite wait!
   
 ## http_timeout
 	Type: Integer
 	Description: Number of seconds before HTTP/HTTPS operations timeout. (0 - 600)
 	Default: 60
-	Switch: `--http-timeout=N`
+	Switch: --http-timeout=N
 	NOTE: Setting this to 0 can cause an infinite wait!
   
 ## http_timeout_connect
 	Type: Integer
 	Description: Number of seconds before HTTP/HTTPS connection attempts timeout. (0 - 600)
 	Default: 30
-	Switch: `--connect-timeout=N`
+	Switch: --connect-timeout=N
 	NOTE: Setting this to 0 can cause an infinite wait!
   
 ## maximum_redirects  
@@ -153,13 +153,13 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Boolean
 	Description: Attempt to get the favicon using normal methods.
 	Default: true
-	Switch: `--tryhomepage`, `--onlyuseapis`
+	Switch: --tryhomepage, -onlyuseapis
   
 ## useragent
 	Type: String
 	Description: User agent to use for HTTP/HTTPS operations.
 	Default: default_useragent
-	Switch: `--useragent="STRING"`
+	Switch: --useragent="STRING"
   
 ## use_buffering
 	Type: Boolean
@@ -173,25 +173,25 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Boolean
 	Description: Append the log file.
 	Default: true
-	Switch: `--append`, `--noappend`
+	Switch: --append, --noappend
 
 ### enabled
 	Type: Boolean
 	Description: Log to a file.
 	Default: true
-	Switch: `--log`, `--nolog`
+	Switch: --log, --nolog
   
 ## level
 	Type: Numeric
 	Description: Log Level
 	Default: 31 (NOTICES, WARNINGS, VERBOSE, ERRORS)
-	Switch: `--loglevel=N`
+	Switch: --loglevel=N
   
 ## pathname
 	Type: String
 	Description: Path and filename for the log file.
-	Default: `get-fav.log`
-	Switch: `--logfile="<PATHNAME>"
+	Default: get-fav.log
+	Switch: --logfile="<PATHNAME>"
   
 ## separator
 	Type: String
@@ -203,12 +203,12 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Boolean
 	Description: Log timestamps
 	Default: false
-	Switch: `--timestamp`, `--notimestamp`
+	Switch: --timestamp, --notimestamp
   
 ### timestampformat
 	Type: String
 	Description: Formatting for timestamps.
-	Default: `"Y-m-d H:i:s"`
+	Default: "Y-m-d H:i:s"
 	Switch: None
 	NOTE: For a complete list of formatting options, please consult https://www.php.net/manual/en/datetime.format.php
 
@@ -218,7 +218,7 @@ These are standard .ini file format files which consist of "sections" and then o
 	Type: Boolean
 	Description: Operating mode of the software.
 	Default: true (CLI), false (HTTP)
-	Switch: `--consolemode`, `--noconsolemode`
+	Switch: --consolemode, --noconsolemode
 	NOTE: Generally this should not be forced, the script will auto-detect which mode to use.
 
 
