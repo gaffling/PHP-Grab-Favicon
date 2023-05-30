@@ -15,23 +15,23 @@ These are standard .ini file format files which consist of "sections" and then o
 ## global
   
 ### debug
-  Type: Boolean
-  Description: Controls debug modes
-  Default: false
-  Switch: `--debug`
-  NOTE: This does not control debug logging, see the *console* and *logging* sections for that.
+	Type: Boolean
+	Description: Controls debug modes
+	Default: false
+	Switch: `--debug`
+	NOTE: This does not control debug logging, see the *console* and *logging* sections for that.
 
 ### api 
 	Type: Boolean
-  Description: Master switch for using APIs to get favicons
-  Default: true
-  Switch: `--disableallapis`
+	Description: Master switch for using APIs to get favicons
+	Default: true
+	Switch: `--disableallapis`
   
 ### blocklist
 	Type: Boolean
 	Description: Master switch to enable using blocklists
-  Default: true
-  Switch: `--enableblocklist`, `--disableblocklist`
+	Default: true
+	Switch: `--enableblocklist`, `--disableblocklist`
 
 ### icon_size
 	Type: Numeric
