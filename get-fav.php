@@ -1,7 +1,97 @@
 <?php
 /*
 
+Should there be a change in the overall flow of things?
+  (depending on options)
+    --checklocal  --nochecklocal
+    --saveifnew  (requires --checklocal and --save)
+  1. Check if icon is on disk
+      if it is, get the md5hash and type
+        if type is not in the 'accepted' list or hash is in the blocklist, mark it as 'wanted'
+      if the icon is not present, mark it as 'wanted'
+     NOTE: This will only work if:
+          1. icons are named how the current settings name things.
+          2. The hash/subfolder option hasn't been used.
+     (if checklocal is not enabled, it will always be marked as wanted)     
+  2. If wanted, try to get favicon
+  3. try different methods to get the favicon, stop when the following is true:
+      icon is a type that is in the accept list
+      icon is not in the blocklist
+  4. When saving, if the new icon hash is the same as the old, skip
+  5. HTML Mode:
+        can show the icon either locally (base64) or with a reference
+       Console:
+        if save is enabled, it shows the save pathname.
+        if save is not enabled, it shows the url for the icon in the format of "domain:url"
+  6. Option to output a text file with the urls for the icons
+        preformat for curl or wget?
+        
+  
+    the internal structure will need 'status' values, maybe more than one
+        wanted
+        found
+        accepted
+        rejected
+        
+    perhaps wrapper it so code can be:
+        if (siteIcon($url) == WANTED) {
+          
+
+API Improvements:      
+  For APIs that use JSON:
+    Currently the JSON structure is too arbitrary.
+      For example:
+            array(2) {
+              ["domain"]=>
+              string(11) "netflix.com"
+              ["icons"]=>
+              array(2) {
+                [0]=>
+                array(1) {
+                  ["src"]=>
+                  string(68) "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.ico"
+                }
+                [1]=>
+                array(1) {
+                  ["src"]=>
+                  string(68) "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.png"
+                }
+              }
+            }
+            
+            other fields with the src record:
+              sizes (WIDTHxHEIGHT)
+              type
+            
+      Presently it will just blindly grab [icons][0][src]
+        it should check the extensions of the URLs offered against the accepted types.
+        
+      so instead of "json_structure" as it now:
+        json_icon_name=icons
+        json_link=src
+        
+        So in this case, we would iterate through the icons part of the json and check each source,
+          if the icon is acceptable (allowed format, not in blocklist), we would stop and continue
+          if no icon is selected skip or fall back to the next API (if tenscious)
+        
+      there also needs to be provision for error handling:
+        json_error=error
+        
+      
+        favicongrabber
+          {"error":"General API error."}
+            
+  
+
+
 Changelog:
+  rewrote API JSON parser
+  added --allowoctetstream / --disallowoctetstream to block potentially invalid icons
+    NOTE: If the more advanced capabilities are not available (curl/mime & content type identification) this may block good data if set to disallow
+  Some HTTP error handling added
+  if VERBOSE, the PHP version will be logged
+  if VERBOSE & Debug capabilities and options will be logged
+  minor changes for PHP 8.2 compatiblity
   added tenacious mode will try all APIs until it gets a successful result
   added precision timers for internal use
   it will now warn if, due to the PHP configuration, some functions that identify formats are not available that results may not be that great
@@ -39,6 +129,7 @@ Changelog:
     append option
 
 TO DO:
+  Add --silent (console mode only)
   add another fallback:
     try to identify file (if needed download a temporary file), return mime type using fopen/fread/file_get_contents
   http mode:
@@ -50,9 +141,6 @@ TO DO:
       get/post
     general:
       option for a delay (set time or a range for random) between icon requests to prevent hammering
-  add tenacious mode (try more than one API)
-    this will go through all enabled APIs until a favicon is found or we run out of APIs to try
-      order will still be random
   blocklist of icons (for example if the apis return archive.org's icon)
     list of md5 hashes
     skipped if blocklist is empty or option is goven
@@ -66,6 +154,11 @@ TO DO:
   more error checking
   should configuration structure be typed automatically (done at set)?
 
+
+ISSUES:
+  medium.ico is often octet-stream and doesn't seem to work:
+    md5 989fc29016f391122a2e735ef8f7ad31
+    
     
   
 PHP Grab Favicon
@@ -137,7 +230,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202305312016');
+define('PROGRAM_VERSION', '202306011529');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -153,12 +246,14 @@ define('DEFAULT_OVERWRITE', false);
 define('DEFAULT_ENABLE_BLOCKLIST', true);
 define('DEFAULT_TENACIOUS', false); 
 define('DEFAULT_REMOVE_TLD', false);
+define('DEFAULT_ALLOW_OCTET_STREAM', true);
 define('DEFAULT_USE_LOAD_BUFFERING', true);
 define('DEFAULT_LOG_PATHNAME', "get-fav.log");
 define('DEFAULT_LOG_FILE_ENABLED', false);
 define('DEFAULT_LOG_CONSOLE_ENABLED', true);
 define('DEFAULT_LOG_APPEND', true);
 define('DEFAULT_LOG_SEPARATOR', str_repeat("*", 80));
+define('DEFAULT_LOG_SHORT_SEPARATOR', "* * *");
 define('DEFAULT_LOG_TIMESTAMP_CONSOLE', false);
 define('DEFAULT_LOG_TIMESTAMP_FILE', true);
 define('DEFAULT_LOG_TIMESTAMP_FORMAT', "Y-m-d H:i:s");
@@ -222,6 +317,10 @@ define('TIME_TYPE_STANDARD', 1);
 define('TIME_TYPE_MICROTIME', 2);
 define('TIME_TYPE_HRTIME', 3);
 
+/*  States */
+define('STATE_WANTED', 1);
+define('STATE_FOUND', 2);
+
 /*  Config Types */
 define('CONFIG_TYPE_SCALAR', 0);
 define('CONFIG_TYPE_STRING', 1);
@@ -248,11 +347,10 @@ $functiontrace = array();
 $processed = array();
 $timers = array();
 
-$numberOfIconsToFetch = 0;
-$numberOfIconsFetched = 0;
 $flag_log_initialized = 0;
 $log_handle = null;
 
+/* Start Initializing */
 startTimer("program");
 setItem("project_name",PROJECT_NAME);
 setItem("program_name",PROGRAM_NAME);
@@ -265,7 +363,7 @@ if (file_exists(DEFAULT_API_DATABASE)) {
 }
 
 /*
-**  Load APIs
+**  If no APIs have been loaded, add Default APIs
 **  addAPI($name,$url,$json,$enabled,$json_structure(),$display)
 */
 
@@ -278,7 +376,6 @@ if (empty($apiList)) {
 
 $display_name_API_list = getAPIList(true);
 $display_API_list = getAPIList();
-
 
 /*
 **  Determine Capabilities of PHP installation
@@ -300,6 +397,7 @@ addCapability("php","hrtime",function_exists('hrtime'));
 */
 
 setConfiguration("global","debug",false);
+setConfiguration("global","allow_octet_stream",DEFAULT_ALLOW_OCTET_STREAM);
 setConfiguration("global","api",DEFAULT_ENABLE_APIS);
 setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
 setConfiguration("global","icon_size",DEFAULT_SIZE);
@@ -331,6 +429,7 @@ setConfiguration("logging","enabled",DEFAULT_LOG_FILE_ENABLED);
 setConfiguration("logging","level",DEFAULT_LOG_LEVEL_FILE);
 setConfiguration("logging","pathname",DEFAULT_LOG_PATHNAME);
 setConfiguration("logging","separator",DEFAULT_LOG_SEPARATOR);
+setConfiguration("logging","short_separator",DEFAULT_LOG_SHORT_SEPARATOR);
 setConfiguration("logging","timestamp",DEFAULT_LOG_TIMESTAMP_FILE);
 setConfiguration("logging","timestampformat",DEFAULT_LOG_TIMESTAMP_FORMAT);
 setConfiguration("mode","console",getCapability("php","console"));
@@ -338,6 +437,9 @@ setConfiguration("mode","console",getCapability("php","console"));
 /* Modify Configuration Depending on Other Options */
 if (isset($_SERVER['SERVER_NAME'])) { setConfiguration("http","default_useragent",DEFAULT_USER_AGENT . " (+http://". $_SERVER['SERVER_NAME'] ."/)"); }
 if (!DEFAULT_USE_CURL) { setConfiguration("curl","enabled",false); }
+
+/*  Ensure Configuration Is Setup Properly */
+validateConfiguration();
 
 if (getConfiguration("mode","console")) { $script_name = basename(__FILE__); } else { $script_name = basename($_SERVER['PHP_SELF']); }
 
@@ -391,6 +493,8 @@ $longopts  = array(
   "nooverwrite",
   "bufferhttp",
   "nobufferhttp",
+  "allowoctetstream",
+  "disallowoctetstream",
   "skip",
   "nocurl",
   "curl-verbose",
@@ -440,7 +544,9 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "--removetld                 Remove top level domain from filename. (default is " . showBoolean(DEFAULT_REMOVE_TLD) . ")\n";
   echo "--noremovetld               Don't remove top level domain from filename.\n";
   echo "--tenacious                 Try all enabled APIs until success. (default is " . showBoolean(DEFAULT_TENACIOUS) . ")\n";
-  echo "--notenacious               Try a random API\n";
+  echo "--notenacious               Try a random API.\n";
+  echo "--allowoctetstream          Allow MimeType 'application/octet-stream'. (default is " . showBoolean(DEFAULT_ALLOW_OCTET_STREAM) . ")\n";
+  echo "--disallowoctetstream       Block MimeType 'application/octet-stream' for icons.\n";
   echo "--consolemode               Force console output.\n";
   echo "--noconsolemode             Force HTML output.\n";
   echo "--debug                     Enable debug mode.\n";
@@ -478,7 +584,6 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
 
 /* 
 **  Command Line Options
-**
 **  Aliased Options
 */
 
@@ -521,6 +626,7 @@ setConfiguration("files","local_path",(isset($options['path']))?$options['path']
 setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("files","remove_tld",(isset($options['removetld']))?$options['removetld']:null,(isset($options['noremovetld']))?$options['noremovetld']:null,CONFIG_TYPE_SWITCH_PAIR);
+setConfiguration("global","allow_octet_stream",(isset($options['allowoctetstream']))?$options['allowoctetstream']:null,(isset($options['disallowoctetstream']))?$options['disallowoctetstream']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("global","blocklist",(isset($options['enableblocklist']))?$options['enableblocklist']:null,(isset($options['disableblocklist']))?$options['disableblocklist']:null,CONFIG_TYPE_SWITCH_PAIR);
 setConfiguration("global","debug",(isset($options['debug']))?$options['debug']:null,null,CONFIG_TYPE_SWITCH);
 setConfiguration("global","icon_size",(isset($options['size']))?$options['size']:null);
@@ -541,11 +647,24 @@ setConfiguration("mode","console",(isset($options['consolemode']))?$options['con
 if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
 if (isset($options['disableallapis'])) { setConfiguration("global","api",false); }
 
+/*  Final Configuration Validate */
 validateConfiguration();
 
+/*  Start Logging (Console/HTML/File) */
 writeLog(getItem("banner"),TYPE_ALL);
-# TO DO:
-#   show options
+writeLog("PHP Version: " . phpversion(),TYPE_VERBOSE);
+if (debugMode()) {
+  writeLog("Running Debug Mode",TYPE_VERBOSE);
+  writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+  writeLog("Capabilities:",TYPE_VERBOSE);
+  writeLog("* Extension EXIF Enabled: " . showBoolean(getCapability("php","exif")),TYPE_VERBOSE);
+  writeLog("* Extension FileInfo Enabled: " . showBoolean(getCapability("php","fileinfo")),TYPE_VERBOSE);
+  writeLog("* Extension cURL Enabled: " . showBoolean(getCapability("php","curl")),TYPE_VERBOSE);
+  writeLog("* Function file_get_contents Available: " . showBoolean(getCapability("php","get")),TYPE_VERBOSE);
+  writeLog("* Function file_put_contents Available: " . showBoolean(getCapability("php","put")),TYPE_VERBOSE);
+  writeLog("* Function hrtime Available: " . showBoolean(getCapability("php","hrtime")),TYPE_VERBOSE);
+  writeLog("* Function mime_content_type Available: " . showBoolean(getCapability("php","mimetype")),TYPE_VERBOSE);
+}
 
 /*  Warn If Capabilities Are Too Weak */
 if ((!getCapability("php","exif")) && (!getCapability("php","fileinfo")) && (!getCapability("php","mimetype"))) { writeLog("Your PHP installation is reporting exif, fileinfo and mimetype as unavailable, results will be impaired.",TYPE_WARNING); }
@@ -613,20 +732,37 @@ $display_API_list = getAPIList();
 if (is_null($display_API_list)) { $display_API_list = "none"; }
 
 /* Validate URL List */
+writeLog("Validating URL List",TYPE_DEBUGGING);
 validateURLList();
 
 /*  Set PHP User Agent/Timeouts if Required */
+writeLog("Setting PHP User Agent and Timeouts",TYPE_DEBUGGING);
 initializePHPAgent();
+
+/*  Show Configuration Options */
+writeLog("All Lists Loaded:",TYPE_VERBOSE);
+writeLog("-> APIs Loaded: $display_API_list",TYPE_VERBOSE);
+writeLog("-> Valid Icon Types: " . getValidTypes(),TYPE_VERBOSE);
+writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+writeLog("Options:",TYPE_VERBOSE);
+writeLog("-> Local Path: '" . getConfiguration("files","local_path") . "'",TYPE_VERBOSE);
+writeLog("-> Global Settings: Icon Size: " . getConfiguration("global","icon_size") . ", Tenacious? " . showBoolean(getConfiguration("global","tenacious")),TYPE_VERBOSE);
+writeLog("-> File Settings: Save? " . showBoolean(getConfiguration("files","store")) . ", Overwrite? " . showBoolean(getConfiguration("files","overwrite")) . ", Remove TLD? " . showBoolean(getConfiguration("files","remove_tld")),TYPE_VERBOSE);
+writeLog("-> HTTP Settings: Buffering? " . showBoolean(getConfiguration("http","use_buffering")) . ", Timeout? " . getConfiguration("http","http_timeout") . ", Connect Timeout? " . getConfiguration("http","http_timeout_connect") . ", DNS Timeout? " . getConfiguration("http","dns_timeout") . ", Try Homepage? " . showBoolean(getConfiguration("http","try_homepage")),TYPE_VERBOSE);
+if (getConfiguration("curl","enabled")) { writeLog("-> cURL is Enabled",TYPE_VERBOSE); } else { writeLog("-> cURL is Disabled",TYPE_VERBOSE); }
+if (getConfiguration("global","api")) { writeLog("-> API Use is Enabled",TYPE_VERBOSE); } else { writeLog("-> API Use is Disabled",TYPE_VERBOSE); }
+writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+
+/*  Do the Thing */
 addStatistic("process_counter", 0);
 if (empty($URLList)) {
   addStatistic("fetch", 0);  
   addStatistic("fetched", 0);
 } else {
-  $numberOfIconsToFetch = count($URLList);
-  addStatistic("fetch", $numberOfIconsToFetch);  
+  addStatistic("fetch", count($URLList));  
   addStatistic("fetched", 0);
   
-  writeLog("Looking for $numberOfIconsToFetch Icons",TYPE_VERBOSE);
+  writeLog("Looking for " . getStatistic("fetch") . " Icons",TYPE_VERBOSE);
 
   /*  Process List */
   foreach ($URLList as $url) {
@@ -637,7 +773,6 @@ if (empty($URLList)) {
   foreach ($favicons as $favicon) {
     if (!empty($favicon)) { 
       if (file_exists($favicon)) {
-        $numberOfIconsFetched++;
         incrementStatistic("fetched");
         $htmlMode = array(
           "html_template" => HTML_STYLE_ICON,
@@ -721,25 +856,41 @@ function grap_favicon($url) {
     if (isset($parsed_url['pass'])) { $url_password = $parsed_url['pass']; } 
     if (isset($parsed_url['path'])) { $url_path = $parsed_url['path']; } 
     
+    # TO DO:
+    #   should see if this is handling more complex names correctly:
+    #     e.g. cdn.subdomain.company.com
+    #          company.com:port
+    
     // Check Domain
     $domainParts = explode('.', $domain);
-    if(count($domainParts) >= 2) {
-      $core_domain = $domainParts[count($domainParts)-2];
-    }
-    
-    if(count($domainParts) == 3 and $domainParts[0]!='www') {
-      // With Subdomain (if not www)
-      $domain = $domainParts[0].'.'.
-                $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-    } else if (count($domainParts) >= 2) {
-      // Without Subdomain
-      $domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-    } else {
-      // Without http(s)
-      $domain = $url;
+    if (empty($domainParts)) {
+        $core_domain = $domain;
+      } else {
+      if(count($domainParts) >= 2) {
+        $core_domain = $domainParts[count($domainParts)-2];
+      }
+      
+      if(count($domainParts) == 3 and $domainParts[0]!='www') {
+        // With Subdomain (if not www)
+        $domain = $domainParts[0].'.'.
+                  $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
+      } else if (count($domainParts) >= 2) {
+        // Without Subdomain
+        $domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
+      } else {
+        // Without http(s)
+        $domain = $url;
+      }
     }
   }
   
+  # TO DO:
+  #   if option is enabled:
+  #     check if icon is on disk
+  #       get content type
+  #       get hash
+  #       test against icon and block lists
+  #   
   writeLog("Processing $url, Domain: $domain using $protocol",TYPE_DEBUGGING);
 
   if ($trySelf) {
@@ -815,6 +966,7 @@ function grap_favicon($url) {
   // If nothing works: Get the Favicon from API
   if ((!isset($favicon)) || (empty($favicon))) {
     $api_count = getAPICount();
+    
     writeLog("Falling Back to API, $api_count are defined and enabled",TYPE_DEBUGGING);
     
     if ($api_count > 0) {
@@ -839,6 +991,7 @@ function grap_favicon($url) {
       foreach ($selectedAPIList as $selectedAPI) {
         $method = "api";
         $api_valid = true;
+        $flag_accepted = false;
         
         writeLog("Attempting To Load API Record: '$selectedAPI'",TYPE_SPECIAL);
         $selectAPI = getAPI($selectedAPI);
@@ -850,7 +1003,6 @@ function grap_favicon($url) {
         if (isset($selectAPI['enabled'])) { $api_enabled = $selectAPI['enabled']; } else { $api_enabled = null; }
         if (isset($selectAPI['json_structure'])) { $api_json_structure = $selectAPI['json_structure']; } else { $api_json_structure = null; }
         if (isset($selectAPI['apikey'])) { $api_key = $selectAPI['apikey']; } else { $api_key = null; }
-        if (isset($selectAPI['verb'])) { $api_verb = $selectAPI['verb']; } else { $api_verb = null; }
         
         if ((is_null($api_name)) || (is_null($api_url)) || (is_null($api_enabled)) || (is_null($api_json))) { $api_valid = false; }
         
@@ -863,39 +1015,148 @@ function grap_favicon($url) {
             $attemptCount++;
             if ($api_max_attempts > 1) { $section_prefix = "$api_attempt: "; } else { $section_prefix = "API: ";  }
             writeLog($section_prefix . "$method: Selected '$api_display'",TYPE_DEBUGGING);
-            $favicon = getAPIurl($api_url,$domain,$iconSize);
-            # TO DO:
-            #   Implement APIKEY, VERB
-            if (!is_null($favicon)) {
+            $api_request = getAPIurl($api_url,$domain,$iconSize,$api_key);
+            if (isset($api_request)) {
               if ($api_json) {
-                $json_data = json_decode(load($favicon),true);
-                if (!is_null($json_data)) {
-                  $favicon = $json_data;
-                  if (!empty($api_json_structure)) {
-                    # TO DO:
-                    # this could be better parsing
-                    foreach ($api_json_structure as $element) {
-                      $favicon = $favicon[$element];
+                writeLog($section_prefix . "$method: Getting JSON Data for '$api_request'",TYPE_DEBUGGING);
+                $api_data = load($api_request);
+                if (isLastLoadResultValid()) {
+                  $http_code = getLastLoadResult("http_code");
+                  if (is_null($http_code)) {
+                    writeLog($section_prefix . "$method: API returned a null http response code",TYPE_TRACE);
+                  } else {
+                    if ($http_code >= 400) {
+                      writeLog($section_prefix . "$method: API returned an error=$http_code",TYPE_TRACE);
+                      $api_data = null;
                     }
-                  }  
-                }            
-              }
-            }
-            if (isset($favicon)) {
-              if (!is_null($favicon)) {
-                $fileExtension = getIconExtension($favicon,false);
-                if ($fileExtension['valid']) {
-                  writeLog($section_prefix . "$method: Request URL '$favicon' was successful",TYPE_DEBUGGING);  
-                  break;
+                  }
                 } else {
-                  writeLog($section_prefix . "$method: Request URL '$favicon' did not return a valid icon",TYPE_DEBUGGING);
+                  $api_data = null;
+                }
+                if (is_null($api_data)) {
+                  $json_data = null;
+                } else {
+                  $json_data = json_decode($api_data,true);
+                }
+                if (!is_null($json_data)) {
+                  if (!empty($api_json_structure)) {
+                    $api_data_error = null;
+                    if (isset($api_json_structure['error'])) {
+                      if (isset($json_data['error'])) { $api_data_error = $api_json_structure['error']; }
+                    }
+                    if (!is_null($api_data_error)) {
+                      if (is_array($api_data_error)) { $api_data_error = json_encode($api_data_error); }
+                      writeLog($section_prefix . "$method: API Error: '$api_data_error'",TYPE_TRACE);
+                    } else {
+                      $icon_counter = 0;
+                      if (isset($api_json_structure['icons'])) {
+                        $icon_block = $json_data['icons'];
+                      } else {
+                        $icon_block = $json_data;
+                      }
+                      if (is_array($icon_block)) {
+                        writeLog($section_prefix . "$method: API Returned " . count($icon_block) . " records",TYPE_TRACE);
+                        foreach ($icon_block as $icon) {
+                          $icon_counter++;
+                          $api_temp = null;
+                          $api_data_link = null;
+                          $api_data_type = null;
+                          $api_data_size = null;
+                          $link_extension = null;
+                          $flag_accepted = false;
+                          $flag_size_ok = true;
+                          if (isset($api_json_structure['link'])) { if (isset($icon[$api_json_structure['link']])) { $api_data_link = $icon[$api_json_structure['link']]; } }
+                          if (!is_string($api_data_link)) { $api_data_link = null; }
+                          
+                          if (!is_null($api_data_link)) {
+                            if (isset($api_json_structure['size'])) { if (isset($icon[$api_json_structure['size']])) { $api_data_size = $icon[$api_json_structure['size']]; } }
+                            if (isset($api_json_structure['mime'])) { if (isset($icon[$api_json_structure['mime']])) { $api_data_type = $icon[$api_json_structure['mime']]; } }
+                            if (isset($api_json_structure['sizeWxH'])) { if (isset($icon[$api_json_structure['sizeWxH']])) { list($api_data_size,$api_discard) = explode("x",$icon[$api_json_structure['sizeWxH']]); } }
+                            if (!is_string($api_data_type)) { $api_data_type = null; }
+                            if (!is_numeric($api_data_size)) { $api_data_size = null; }
+                
+                            if (!is_null($api_data_type)) {
+                              if (!is_null($api_temp)) { $api_temp .= ", "; }
+                              $api_temp .= "type=$api_data_type";
+                            }
+                            if (!is_null($api_data_size)) {
+                              if (!is_null($api_temp)) { $api_temp .= ", "; }
+                              $api_temp .= "size=$api_data_size"; 
+                            }
+                            if (is_null($api_temp)) {
+                              writeLog($section_prefix . "$method: $icon_counter: $api_data_link",TYPE_TRACE);
+                            } else {
+                              writeLog($section_prefix . "$method: $icon_counter: $api_data_link ($api_temp)",TYPE_TRACE);
+                            }
+                            if (!is_null($api_data_size)) {
+                              if (($iconSize > 0) && ($api_data_size > 0)) {
+                                if ($api_data_size < $iconSize) {
+                                  $flag_size_ok = false;
+                                }
+                              }
+                            } 
+                            if ($flag_size_ok) {
+                              if (checkIconAcceptance($api_data_link)) {
+                                $favicon = $api_data_link;
+                                $flag_accepted = true;
+                                break;
+                              } else {
+                                unset($favicon);
+                              }
+                            } else {
+                              if ($iconSize > 0) {
+                                writeLog($section_prefix . "$method: $icon_counter: Icon is below requested size, rejected",TYPE_TRACE);
+                              }
+                            }
+                          }
+                        }
+                      } else {
+                        writeLog($section_prefix . "$method: JSON API Data Block Is Not An Array",TYPE_TRACE);
+                      }
+                    }
+                  } else {
+                    writeLog($section_prefix . "$method: JSON API Does Not Have Structure Defined, Attempting to Parse",TYPE_DEBUGGING);
+                    //  Attempt Simple Parsing
+                    if (is_string($json_data)) { 
+                      $favicon = $json_data;
+                    } elseif (is_array($json_data)) {
+                      if (isset($json_data[0])) {
+                        $favicon = $json_data[0];
+                      }
+                    }
+                  }
+                } else {
+                  if (is_null($api_data)) { 
+                    writeLog($section_prefix . "$method: No JSON Data Returned",TYPE_DEBUGGING);
+                  } else {
+                    writeLog($section_prefix . "$method: Unable to Decode JSON Data",TYPE_DEBUGGING);
+                  }
                   unset($favicon);
                 }
               } else {
-                writeLog($section_prefix . "$method: Request Returned Empty Data",TYPE_DEBUGGING);
+                //  Not a JSON Based API so the response should be the direct favicon URL
+                $favicon = $api_request;
               }
-            } else {
-              writeLog($section_prefix . "$method: Request Did Not Return Data",TYPE_DEBUGGING);
+            } else { 
+              writeLog($section_prefix . "$method: Could not create API Request",TYPE_DEBUGGING);
+              unset($favicon);
+            }
+            if (isset($favicon)) {
+              if (!is_null($favicon)) {
+                if (!$flag_accepted) {
+                  writeLog($section_prefix . "$method: Checking Icon Acceptance for '$favicon'",TYPE_DEBUGGING);
+                  if (checkIconAcceptance($favicon)) { $flag_accepted = true; }
+                }
+                if ($flag_accepted) {
+                  writeLog($section_prefix . "$method: Request URL '$favicon' was successful",TYPE_DEBUGGING);  
+                  break;
+                } else {
+                  writeLog($section_prefix . "$method: Request URL '$favicon' did not return a valid icon or it was rejected",TYPE_DEBUGGING);
+                  unset($favicon);
+                }
+              } else {
+                writeLog($section_prefix . "$method: Icon URL is Null",TYPE_DEBUGGING);
+              }
             }
           } else {
             writeLog($section_prefix . "$method: API Is Disabled!",TYPE_WARNING);
@@ -918,6 +1179,7 @@ function grap_favicon($url) {
     updateProcessEntry($url,"tries",$attemptCount);
   
     if ($save) {
+      // should it check to see if it's resident?
       unset($content);
       writeLog("Loading Icon To Store using '$favicon'",TYPE_DEBUGGING);
 
@@ -1018,117 +1280,122 @@ function grap_favicon($url) {
 function load($url) {
   debugSection("load");
   $content = null;
-  $content_hash = null;
-  $content_type = null;
-  $http_code = null;
-  $method = null;
-  $previous_url = getGlobal('redirect_url');
-  $protocol = parse_url($url,PHP_URL_SCHEME);
-  $protocol_id = null;  
-  $redirect = getGlobal('redirect_count');
-  if (!isset($redirect)) { $redirect = 0; }
-  $flag_skip_loadlastresult = false;
-  
-  //  If no protocol is it's probably a local file.
-  if (is_null($protocol)) {
-    $content = loadLocalFile($url);
+  if (!is_string($url)) {
+    writeLog("ERROR: URL is type (" . gettype($url) . "), var_dump to stdout follows",TYPE_TRACE);
+    var_dump($url);
   } else {
-    if (getConfiguration("http","use_buffering")) {
-      if (isLoadLoadResultValid()) {
-        $lastLoadURL = getLastLoadResult('url');
-        if (!is_null($lastLoadURL)) {
-          if ($lastLoadURL == $url) {
-            $content = getLastLoadResult('content');
-            if (!is_null($content)) {
-              $flag_skip_loadlastresult = true;
+    $content_hash = null;
+    $content_type = null;
+    $http_code = null;
+    $method = null;
+    $previous_url = getGlobal('redirect_url');
+    $protocol = parse_url($url,PHP_URL_SCHEME);
+    $protocol_id = null;  
+    $redirect = getGlobal('redirect_count');
+    if (!isset($redirect)) { $redirect = 0; }
+    $flag_skip_loadlastresult = false;
+    
+    //  If no protocol is it's probably a local file.
+    if (is_null($protocol)) {
+      $content = loadLocalFile($url);
+    } else {
+      if (getConfiguration("http","use_buffering")) {
+        if (isLastLoadResultValid()) {
+          $lastLoadURL = getLastLoadResult('url');
+          if (!is_null($lastLoadURL)) {
+            if ($lastLoadURL == $url) {
+              $content = getLastLoadResult('content');
+              if (!is_null($content)) {
+                $flag_skip_loadlastresult = true;
+              }
             }
           }
         }
       }
     }
-  }
-  
-  if (is_null($content)) {
-    writeLog("loading: url='$url'",TYPE_TRACE);
-    if (getConfiguration("curl","enabled")) {
-      $method = "curl";
-      writeLog("$method: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),TYPE_TRACE);
-      $ch = curl_init($url);
-      if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
-      curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
-      curl_setopt($ch, CURLOPT_TIMEOUT, getConfiguration("http","http_timeout"));
-      curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, getConfiguration("http","http_timeout_connect")); 
-      curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, getConfiguration("http","dns_timeout")); 
-      curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-      curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-      curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-      if (getConfiguration("curl","showprogress")) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
-      $content = curl_exec($ch);
-      $curl_response = curl_getinfo($ch);
-      $content_type = $curl_response['content_type'];
-      $http_code = $curl_response['http_code'];
-      $curl_url = $curl_response['url'];
-      $protocol = $curl_response['scheme'];
-      $protocol_id = $curl_response['protocol'];
-      writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE);
-      curl_close($ch);
-      unset($ch);
-      if (is_null($content)) { writeLog("$method: No content received '$url'",TYPE_TRACE); }
-      if ($http_code == 301 || $http_code == 302 || $http_code == 307 || $http_code == 308)  {
-        $redirect++;
-        if ($redirect < getConfiguration("http","maximum_redirects"))
-        {
-          writeLog("$method: Redirecting to '$curl_url' from '$url'",TYPE_TRACE);
-          setGlobal('redirect_count',$redirect);
-          setGlobal('redirect_url',$curl_url);
-          $content = load($curl_url);
-          $flag_skip_loadlastresult = true;
-        } else {
-          writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
-        }
-      }
-    } else {
-      $method = "stream";
-      $context_options = array(
-        'http' => array(
-          'user_agent' => getConfiguration("http","useragent"),
-          'timeout' => getConfiguration("http","http_timeout"),
-        )
-      );
-      $context = stream_context_create($context_options);
-      if (!getCapability("php","get")) {
-        writeLog("$method: attempting to load '$url'",TYPE_TRACE);
-        $fh = fopen($url, 'r', false, $context);
-        if ($fh) {
-          $content = '';
-          while (!feof($fh)) {
-            $content .= fread($fh, BUFFER_SIZE);
+    
+    if (is_null($content)) {
+      writeLog("loading: url='$url'",TYPE_TRACE);
+      if (getConfiguration("curl","enabled")) {
+        $method = "curl";
+        writeLog("$method: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),TYPE_TRACE);
+        $ch = curl_init($url);
+        if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
+        curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
+        curl_setopt($ch, CURLOPT_TIMEOUT, getConfiguration("http","http_timeout"));
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, getConfiguration("http","http_timeout_connect")); 
+        curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, getConfiguration("http","dns_timeout")); 
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        if (getConfiguration("curl","showprogress")) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
+        $content = curl_exec($ch);
+        $curl_response = curl_getinfo($ch);
+        $content_type = $curl_response['content_type'];
+        $http_code = $curl_response['http_code'];
+        $curl_url = $curl_response['url'];
+        $protocol = $curl_response['scheme'];
+        $protocol_id = $curl_response['protocol'];
+        writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE);
+        curl_close($ch);
+        unset($ch);
+        if (is_null($content)) { writeLog("$method: No content received '$url'",TYPE_TRACE); }
+        if ($http_code == 301 || $http_code == 302 || $http_code == 307 || $http_code == 308)  {
+          $redirect++;
+          if ($redirect < getConfiguration("http","maximum_redirects"))
+          {
+            writeLog("$method: Redirecting to '$curl_url' from '$url'",TYPE_TRACE);
+            setGlobal('redirect_count',$redirect);
+            setGlobal('redirect_url',$curl_url);
+            $content = load($curl_url);
+            $flag_skip_loadlastresult = true;
+          } else {
+            writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
           }
-          fclose($fh);
-        } else {
-          writeLog("Failed to open '$url'",TYPE_TRACE);
         }
       } else {
-        $method = "stream/file_get_contents";
-        writeLog("$method: attempting to load '$url'",TYPE_TRACE);
-        $content = @file_get_contents($url, null, $context);
-        if (is_null($content)) {
-          writeLog("$method: No content received '$url'",TYPE_TRACE);
-        } else {
-          if (!is_null($http_response_header)) {
-            $headers = implode("\n", $http_response_header);
-            if (preg_match_all("/^HTTP.*\s+([0-9]+)/mi", $headers, $matches )) {
-              $http_code = end($matches[1]);
+        $method = "stream";
+        $context_options = array(
+          'http' => array(
+            'user_agent' => getConfiguration("http","useragent"),
+            'timeout' => getConfiguration("http","http_timeout"),
+          )
+        );
+        $context = stream_context_create($context_options);
+        if (!getCapability("php","get")) {
+          writeLog("$method: attempting to load '$url'",TYPE_TRACE);
+          $fh = fopen($url, 'r', false, $context);
+          if ($fh) {
+            $content = '';
+            while (!feof($fh)) {
+              $content .= fread($fh, BUFFER_SIZE);
             }
+            fclose($fh);
+          } else {
+            writeLog("Failed to open '$url'",TYPE_TRACE);
           }
-          if (is_null($http_code)) { writeLog("$method: Return Code=NONE for '$url'",TYPE_TRACE); } else { writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE); }
+        } else {
+          $method = "stream/file_get_contents";
+          writeLog("$method: attempting to load '$url'",TYPE_TRACE);
+          $content = @file_get_contents($url, null, $context);
+          if (is_null($content)) {
+            writeLog("$method: No content received '$url'",TYPE_TRACE);
+          } else {
+            if (!is_null($http_response_header)) {
+              $headers = implode("\n", $http_response_header);
+              if (preg_match_all("/^HTTP.*\s+([0-9]+)/mi", $headers, $matches )) {
+                $http_code = end($matches[1]);
+              }
+            }
+            if (is_null($http_code)) { writeLog("$method: Return Code=NONE for '$url'",TYPE_TRACE); } else { writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE); }
+          }
         }
       }
+      $content_type = getMIMEType($content);
+      if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
+    } else {
+      writeLog("Using buffered result for url='$url'",TYPE_TRACE);
     }
-    $content_type = getMIMEType($content);
-    if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
-  } else {
-    writeLog("Using buffered result for url='$url'",TYPE_TRACE);
   }
   debugSection();
   return $content;
@@ -1221,7 +1488,7 @@ function convertRelativeToAbsolute($rel, $base) {
 }
 
 /*  Content Type Lookups */
-function lookupContentTypeByMIME($content_type = null) {
+function lookupExtensionByMIME($content_type = null) {
   $file_extension = null;
   if (!is_null($content_type)) {
     switch ($content_type) {
@@ -1313,24 +1580,40 @@ function guessContentType($extension) {
 }
 
 /* Get Icon Extension / Verify Icon */
-# TO DO:
-#   Move mime/extension lookups to their own function
-#   it's repeated here a few times
 function getIconExtension($url, $noFallback = false) {
   debugSection("getIconExtension");
   $content_type = null;
   $file_extension = null;
   $method = null;
+  $http_code = null;
+  $is_valid = false;
   if (!empty($url)) {
     $content = load($url);
+    if (isLastLoadResultValid()) {
+      $http_code = getLastLoadResult("http_code");
+      if (is_null($http_code)) {
+        writeLog("url='$url', last load result did not record a response code",TYPE_TRACE);
+        $content_type = getLastLoadResult("content_type");
+      } else {
+        if ($http_code >= 400) {
+          $content = null;
+          $noFallback = true;
+          $is_valid = false;
+          writeLog("url='$url', last load result returned error=$http_code",TYPE_TRACE);
+        } else {
+          $content_type = getLastLoadResult("content_type");
+        }
+      }
+    } else {
+      writeLog("url='$url', last load result was invalid",TYPE_TRACE);
+    }
     if (!is_null($content)) {
-      if (isLoadLoadResultValid()) { $content_type = getLastLoadResult("content_type"); }
       if (is_null($content_type)) {
         if (getCapability("php","exif")) {
           $phpUA = ini_get("user_agent");
           $timeout = ini_get("default_socket_timeout");
           $method = "exif";
-          writeLog("getIconExtension: url='$url', method=$exif, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+          writeLog("url='$url', method=$exif, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
           $filetype = @exif_imagetype($url);
           if (!is_null($filetype)) {
             switch ($filetype) {
@@ -1356,36 +1639,38 @@ function getIconExtension($url, $noFallback = false) {
                 $content_type = null;
                 $file_extension = null;
             }
-            
-            if (!is_null($content_type)) {
-              $file_extension = lookupContentTypeByMIME($content_type);
-            }
+            if (!is_null($content_type)) {  $file_extension = lookupExtensionByMIME($content_type); }
           }
         }
       } else {
         $method = "mimetype";
-        writeLog("getIconExtension: url='$url', method=$method, content-type=$content_type, useragent=N/A, timeout=N/A",TYPE_TRACE);
+        writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
         switch ($content_type) {
           case "text/html":
             $noFallback = true;
             $file_extension = null;
             $is_valid = false;
             break;
+          case "application/octet-stream":
+            if (!getConfiguration("global","allow_octet_stream")) {
+              $noFallback = true;
+              $file_extension = null;
+              $is_valid = false;
+            }
           default:
-            $file_extension = lookupContentTypeByMIME($content_type);
+            $file_extension = lookupExtensionByMIME($content_type);
             if (is_null($file_extension)) {
               $is_valid = false;
             } else {
               $is_valid = true;
             }
-            
         }
       }
     }
     if (is_null($file_extension)) {
       if (!$noFallback) {
         $method = "datacheck";
-        writeLog("getIconExtension: url='$url', method=$method, content-type=null, useragent=N/A, timeout=N/A",TYPE_TRACE);
+        writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
         # TO DO:
         #   data is in $content
         #   check for format markers
@@ -1394,7 +1679,7 @@ function getIconExtension($url, $noFallback = false) {
     if (is_null($file_extension)) {
       if (!$noFallback) {
         $method = "extension";
-        writeLog("getIconExtension: url='$url', method=$method, content-type=null, useragent=N/A, timeout=N/A",TYPE_TRACE);
+        writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
         $extension = @preg_replace('/^.*\.([^.]+)$/D', '$1', $url);
         if (isValidType($extension)) {
           $file_extension = $extension;
@@ -1437,6 +1722,18 @@ function isValidType($type) {
   return $retval;
 }
 
+function getValidTypes() {
+  $retval = null;
+  $extensionList = getConfiguration("global","valid_types");
+  if (!empty($extensionList)) {
+    foreach ($extensionList as $validExtension) {
+      if (!is_null($retval)) { $retval .= ", "; }
+      $retval .= $validExtension;
+    }
+  }
+  return $retval;
+}
+
 /*  Adds the favicon path to the URL */
 function addFavIconToURL($url) {
   if(strrev($url)[0]==='/') {
@@ -1448,8 +1745,65 @@ function addFavIconToURL($url) {
   return $url;
 }
 
-function validateIcon($pathname, $removeIfInvalid = false) {
+function checkIconAcceptance($url = null) {
+  debugSection("checkIconAcceptance");
+  $retval = false;
+  if (!is_null($url)) {
+    if (is_string($url)) {
+      writeLog("Checking Icon Type for '$url'",TYPE_TRACE);
+      $fileData = getIconExtension($url,false);
+      if ($fileData['valid']) {
+        $extension = $fileData['extension'];
+        $content_type = $fileData['content_type'];
+        if ((is_null($extension)) && (is_null($content_type))) {
+          writeLog("getIconExtension returned valid but both extension and content_type are null",TYPE_TRACE);
+        } else {
+          if ((is_null($extension)) && (!is_null($content_type))) {
+            $extension = lookupExtensionByMIME($content_type);
+          }
+          if ((!is_null($extension)) && (is_null($content_type))) {
+            $content_type = lookupContentTypeByExtension($extension);
+          }
+          if (isValidType($extension)) {
+            if (validateIcon($url)) {
+              $retval = true;
+            } else {
+              writeLog("validateIcon rejected the icon",TYPE_TRACE);
+            }
+          } else {
+            writeLog("isValidType rejected the icon",TYPE_TRACE);
+          }
+        }
+      } else {
+        writeLog("getIconExtension rejected the icon",TYPE_TRACE);
+      }
+    } else {
+      writeLog("URL is not a string",TYPE_TRACE);
+    }
+  } else {
+    writeLog("URL is null",TYPE_TRACE);
+  }
+  debugSection();              
+  return $retval;
+}
+
+function validateIconByHash($hash) {
+  debugSection("validateIconByHash");
+  $retval = true;
+  # check blocklist
+  
+  debugSection();
+  
+  return $retval;
+}
+
+function validateIcon($iconfile, $removeIfInvalid = false) {
   debugSection("validateIcon");
+  $retval = true;
+  
+  # use load, will load via url or locally
+  #   md5 hash should be present, call validateIconByHash
+  #   removeIfInvalid is only applicable if it's a local file
   # TO DO
   #   determine if the pathname is:
   #     a valid image file
@@ -1457,7 +1811,8 @@ function validateIcon($pathname, $removeIfInvalid = false) {
   #
   # if it is not a valid (or is blocked) and removeIfInvalid is true, delete it.
   debugSection();
-  $retval = false;
+  
+  return $retval;
 }
 
 /* Set Global Variable */
@@ -1515,229 +1870,6 @@ function setRange($value,$min = null,$max = null) {
   }
   $value = intval($value);
   return $value;
-}
-
-/*
-**  API Support Functions **
-**
-**    name      Name/ID for the API
-**    url       URL for the API
-**    json      Does API return JSON?
-**    enabled   Is API enabled?
-**    display   Display Name (cosmetic only), defaults to name
-**
-**    json_structure is an array of the expected json data turned.
-**
-**
-*/
-
-function isValidAPIElement($element) {
-  $retval = false;
-  
-  if (isset($element)) {
-    if (!is_null($element)) {
-      $element = normalizeKey($element);
-      if ($element == "display") { $retval = true; }
-      if ($element == "name") { $retval = true; }
-      if ($element == "url") { $retval = true; }
-      if ($element == "json") { $retval = true; }
-      if ($element == "enabled") { $retval = true; }
-      if ($element == "json_structure") { $retval = true; }
-      if ($element == "apikey") { $retval = true; }
-      if ($element == "verb") { $retval = true; }
-    }
-  }
-  return $retval;
-}
-
-
-/* Add an API */
-function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array(),$display = null,$apikey = null,$verb = null) {
-  global $apiList;
-
-  $name = normalizeKey($name);
-  $entry = array();
-  if (is_null($display)) { $display = $name; }
-  $entry['display'] = $display;
-  $entry['name'] = $name;
-  $entry['url'] = $url;
-  $entry['json'] = $json;
-  $entry['enabled'] = $enabled;
-  $entry['json_structure'] = $json_structure;
-  $entry['apikey'] = $apikey;
-  $entry['verb'] = $verb;
-
-  array_push($apiList,$entry);
-  refreshAPIList();
-}
-
-function getAPIIndex() {
-  global $apiList;
-  $retval = array();
-  if (!empty($apiList)) {
-    foreach ($apiList as $item) {
-      if (isset($item['name'])) {
-        if (isset($item['enabled'])) {
-          if ($item['enabled']) {
-            array_push($retval,$item['name']);
-          }
-        }
-      }
-    }
-  }
-  return $retval;
-}
-
-function getAPIList($displayName = false) {
-  global $apiList;
-  
-  $retval = null;
-  $counter = 0;
-  
-  if (!empty($apiList)) {
-    foreach ($apiList as $item) {
-      if (isset($item['name'])) {
-        $api_name = $item['name'];
-        if ($displayName) { if (isset($item['display'])) { $api_name = $item['display']; } }
-        $api_enabled = $item['enabled'];
-        if (!is_null($api_name)) { 
-          if (!is_null($retval)) { $retval .= ", "; }
-          $retval .= $api_name;
-          if (!$api_enabled) { $retval .= "*"; }
-        }
-      }
-    }
-  }
-  
-  if (is_null($retval)) { if ($displayName) { $retval = "None"; } else { $retval = "none"; } }
-  
-  return $retval;
-}
-
-function refreshAPIList($isenabled = true) {
-  global $apiList; 
-  $count = 0;
-  if (!empty($apiList)) {
-    foreach ($apiList as $item) {
-      if (isset($item['display'])) { $api_display = $item['display']; } else { $api_display = null; }
-      if (isset($item['name'])) { $api_name = $item['name']; } else { $api_name = null; }
-      if (isset($item['url'])) { $api_url = $item['url']; } else { $api_url = null; }
-      if (isset($item['json'])) { $api_json = $item['json']; } else { $api_json = null; }
-      if (isset($item['enabled'])) { $api_enabled = $item['enabled']; } else { $api_enabled = null; }
-      if (isset($item['json_structure'])) { $api_json_structure = $item['json_structure']; } else { $api_json_structure = null; }
-      if (isset($item['apikey'])) { $api_apikey = $item['apikey']; } else { $api_apikey = null; }
-      if (isset($item['verb'])) { $api_verb = $item['verb']; } else { $api_verb = null; }
-      if (!is_null($api_name)) {
-        if ($isenabled) {
-          if ($api_enabled) { $count++; }
-        } else {
-          $count++;
-        }
-      }
-    }
-  }
-  setItem("api_count",$count);
-}
-
-/*  Return a count of APIs */
-function getAPICount($isenabled = true) {
-  $api_count = getItem("api_count");
-  if (!isset($api_count)) { 
-    refreshAPIList($isenabled);
-    $api_count = getItem("api_count");
-  }
-  return $api_count;
-}
-
-/* Return an API object */
-function getAPI($name) {
-  return lookupAPI('name',$name);
-}
-
-/* Return the Name of a Random API */
-function getRandomAPIName() {
-  global $apiList;
-  
-  $api_name = null;
-  $api_count = getAPICount();
-  $api_index = getAPIIndex();
-  
-  if ($api_count > 0) {
-    shuffle($api_index);
-    $api_name = array_shift($api_index);
-  }
-    
-  return $api_name;
-}
-
-/* Select a Random API */
-function getRandomAPI() {
-  global $apiList;
-  
-  $api_count = getAPICount();
-  $return_object = getEmptyAPIEntry();
-  
-  $flag_selecting = true;
-  
-  if ($api_count > 0) {
-    while ($flag_selecting) {
-      $api_name = array_rand($apiList,1);
-      $return_object = getAPI($api_name);
-      if (!is_null($return_object['name'])) {
-        if ($return_object['enabled']) {
-          $flag_selecting = false;
-        }
-      }
-    }
-  }
-  return $return_object;
-}
-
-function getEmptyAPIEntry() {
-  $return_object = array();
-  $return_object['name'] = null;
-  $return_object['display'] = null;
-  $return_object['url'] = null;
-  $return_object['json'] = false;
-  $return_object['enabled'] = false;
-  $return_object['json_structure'] = array();
-  $return_object['apikey'] = null;
-  $return_object['verb'] = null;
-
-  return $return_object;
-}
-
-/* Lookup API */
-function lookupAPI($element,$value) {
-  global $apiList;
-
-  $element = normalizeKey($element);
-  $return_object = getEmptyAPIEntry();
-  
-  if (isValidAPIElement($element)) {
-    foreach ($apiList as $item) {
-      if (!is_null($item['name'])) {
-        if (isset($item[$element])) {
-          if (strcasecmp($item[$element], $value) == 0) {
-            $return_object = array();
-            $return_object = $item;
-            break;
-          }
-        }
-      }
-    }
-  }
-  return $return_object;
-}
-
-/*  Populate API URL */
-function getAPIurl($url,$domain,$size = 0) {
-  if ($size == 0) { $size = getConfiguration("global","icon_size"); }
-  
-  $processed_url = $url;
-  $processed_url = str_replace("<DOMAIN>",$domain,$processed_url);
-  $processed_url = str_replace("<SIZE>",$size,$processed_url);
-  return $processed_url;
 }
 
 /*  Render HTML */
@@ -2120,105 +2252,112 @@ function getTimestamp($format = null,$time = null) {
 **  Configuration Controller
 **
 */
-function setConfiguration($scope = "global",$option,$value = null,$default = null,$type = CONFIG_TYPE_SCALAR) {
+function setConfiguration($scope = "global",$option = null,$value = null,$default = null,$type = CONFIG_TYPE_SCALAR) {
   global $configuration;
   $flag_fallback = true;
   $flag_handled = false;
   
-  $option = normalizeKey($option);
-  if (isset($value)) {
-    switch ($type) {
-      case CONFIG_TYPE_PATH:            /* Validate Path */
-        if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
-        break;
-      case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
-        if (is_bool($value)) { $flag_fallback = false; }
-        break;
-      case CONFIG_TYPE_STRING:          /* Validate String */
-        if (is_string($value)) { $flag_fallback = false; }
-        break;
-      case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
-        if (is_numeric($value)) { $flag_fallback = false; }
-        break;
-      case CONFIG_TYPE_SWITCH:          /* Validate Switch */
-        if (isset($value)) {
-          $flag_fallback = false;
-          $value = true;
-        }
-        break;
-      case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
-        $flag_handled = true;
-        if (isset($value)) {
-          $flag_handled = true;
-          $configuration[$scope][$option] = true;
-        }
-        if (isset($default)) {
-          $flag_handled = true;
-          $configuration[$scope][$option] = false;
-        }
-        break;
-      case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
-        if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
-        if (isset($value)) {
-          if (!is_null($value)) {
+  if (!is_null($option)) {
+    $option = normalizeKey($option);
+    if (isset($value)) {
+      switch ($type) {
+        case CONFIG_TYPE_PATH:            /* Validate Path */
+          if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
+          break;
+        case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+          if (is_bool($value)) { $flag_fallback = false; }
+          break;
+        case CONFIG_TYPE_STRING:          /* Validate String */
+          if (is_string($value)) { $flag_fallback = false; }
+          break;
+        case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+          if (is_numeric($value)) { $flag_fallback = false; }
+          break;
+        case CONFIG_TYPE_SWITCH:          /* Validate Switch */
+          if (isset($value)) {
             $flag_fallback = false;
-            if (strtolower($value) == "none") {
-              $value = null;
+            $value = true;
+          }
+          break;
+        case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
+          $flag_handled = true;
+          if (isset($value)) {
+            $flag_handled = true;
+            $configuration[$scope][$option] = true;
+          }
+          if (isset($default)) {
+            $flag_handled = true;
+            $configuration[$scope][$option] = false;
+          }
+          break;
+        case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
+          if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
+          if (isset($value)) {
+            if (!is_null($value)) {
+              $flag_fallback = false;
+              if (strtolower($value) == "none") {
+                $value = null;
+              }
             }
           }
-        }
-        break;
-      default:                          /* Just see if it's set */
-        if (isset($value)) { $flag_fallback = false; }
-        break;
+          break;
+        default:                          /* Just see if it's set */
+          if (isset($value)) { $flag_fallback = false; }
+          break;
+      }
     }
-  }
-      
-  if (!$flag_handled) {
-    if ($flag_fallback) { $value = $default; }
-    if (isset($value)) { $configuration[$scope][$option] = $value; }
+        
+    if (!$flag_handled) {
+      if ($flag_fallback) { $value = $default; }
+      if (isset($value)) { $configuration[$scope][$option] = $value; }
+    }
   }
 }
 
-function getConfiguration($scope = "global",$option) {
+function getConfiguration($scope = "global",$option = null) {
   global $configuration;
   
-  $option = normalizeKey($option);
-  if (isset($configuration[$scope][$option])) { $value = $configuration[$scope][$option]; } else { $value = null; }
+  $value = null;
+  if (!is_null($option)) {
+    $option = normalizeKey($option);
+    if (isset($configuration[$scope][$option])) { $value = $configuration[$scope][$option]; }
+  }
   
   return $value;
 }
 
-function validateConfigurationSetting($scope = "global",$option,$type = 0,$min = 0,$max = 0) {
+function validateConfigurationSetting($scope = "global",$option = null,$type = 0,$min = 0,$max = 0) {
   global $configuration;
   
-  $option = normalizeKey($option);
-  if (isset($configuration[$scope][$option])) {
-    $value = $configuration[$scope][$option];
-    switch ($type) {
-      case CONFIG_TYPE_PATH:            /* Validate Path */
-        if (isset($value)) {
-          if (!file_exists($value)) {
-            $value = null;
+  if (!is_null($option)) {
+    $option = normalizeKey($option);
+    if (isset($configuration[$scope][$option])) {
+      $value = $configuration[$scope][$option];
+      switch ($type) {
+        case CONFIG_TYPE_PATH:            /* Validate Path */
+          if (isset($value)) {
+            if (!file_exists($value)) {
+              $value = null;
+            }
           }
-        }
-        if ((!isset($value)) || (is_null($value))) {
-          if ($min == 0) {
-            $min = DEFAULT_LOCAL_PATH;
+          if ((!isset($value)) || (is_null($value))) {
+            if ($min == 0) {
+              $min = DEFAULT_LOCAL_PATH;
+            }
+            $configuration[$scope][$option] = $min;
           }
-          $configuration[$scope][$option] = $min;
-        }
-        break;
-      case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
-        $value = setRange($value,$min,$max);
-        if (is_numeric($value)) { $configuration[$scope][$option] = $value; }
-        break;
-      case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
-        if (!is_bool($value)) {
-          $value = setBoolean($value);
-          if (is_bool($value)) { $configuration[$scope][$option] = $value; }
-        } 
-        break;
+          break;
+        case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+          $value = setRange($value,$min,$max);
+          if (is_numeric($value)) { $configuration[$scope][$option] = $value; }
+          break;
+        case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+          if (!is_bool($value)) {
+            $value = setBoolean($value);
+            if (is_bool($value)) { $configuration[$scope][$option] = $value; }
+          } 
+          break;
+      }
     }
   }
 }
@@ -2277,88 +2416,6 @@ function validateURLList() {
   debugSection();
 }
 
-
-/*  Validate Configuration */
-function validateConfiguration() {
-  debugSection("validateConfiguration");
-  
-  validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("global","icon_size",CONFIG_TYPE_NUMERIC,RANGE_ICON_SIZE_MINIMUM,RANGE_ICON_SIZE_MAXIMUM);
-  validateConfigurationSetting("global","tenacious",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("console","enabled",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
-  validateConfigurationSetting("console","timestamp",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
-  validateConfigurationSetting("debug","dump_structures",CONFIG_TYPE_BOOLEAN);  
-  validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
-  validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("files","remove_tld",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
-  validateConfigurationSetting("http","http_timeout",CONFIG_TYPE_NUMERIC,RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM);
-  validateConfigurationSetting("http","http_timeout_connect",CONFIG_TYPE_NUMERIC,RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM);
-  validateConfigurationSetting("http","maximum_redirects",CONFIG_TYPE_NUMERIC,RANGE_HTTP_REDIRECTS_MINIMUM,RANGE_HTTP_REDIRECTS_MAXIMUM);
-  validateConfigurationSetting("http","try_homepage",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("http","use_buffering",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("http","default_protocol_https",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("http","default_protocol_fallback",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("logging","append",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("logging","enabled",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("logging","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
-  validateConfigurationSetting("logging","timestamp",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
-  
-  if (getConfiguration("logging","enabled")) {
-    if (is_null(getConfiguration("logging","pathname"))) {
-      writeLog("validateConfiguration: pathname is not set, disabling logging option",TYPE_TRACE);
-      setConfiguration("logging","enabled",false);
-    }
-    if (getConfiguration("logging","timestamp")) {
-      if (is_null(getConfiguration("logging","timestampformat"))) {
-        writeLog("validateConfiguration: timestampformat is not set, disabling logging timestamp",TYPE_TRACE);
-        setConfiguration("logging","timestamp",false);
-      }
-    }
-    if (getConfiguration("logging","append")) {
-      if (is_null(getConfiguration("logging","separator"))) {
-        setConfiguration("logging","separator","* * *");
-      }
-    }
-  }
-
-  if (getConfiguration("console","enabled")) {
-    if (getConfiguration("console","timestamp")) {
-      if (is_null(getConfiguration("console","timestampformat"))) {
-        writeLog("validateConfiguration: timestampformat is not set, disabling console timestamp",TYPE_TRACE);
-        setConfiguration("console","timestamp",false);
-      }
-    }
-  }
-    
-  if (getConfiguration("files","store")) {
-    if (is_null(getConfiguration("files","local_path"))) {
-        writeLog("validateConfiguration: local_path is not set, disabling store option",TYPE_TRACE);
-        setConfiguration("files","store",false);
-    } else {
-      if (!file_exists(getConfiguration("files","local_path"))) {
-        writeLog("validateConfiguration: local_path is invalid, disabling store option",TYPE_TRACE);
-        setConfiguration("files","store",false);
-      }
-    }
-  }
-  
-  if (getConfiguration("curl","enabled")) {
-    if (!getCapability("php","curl")) {
-      writeLog("validateConfiguration: curl is enabled but not supported, disabling",TYPE_TRACE);
-      setConfiguration("curl","enabled",false);
-    }
-  }
-  debugSection();
-}
-
 function normalizeKey($key) {
   if (isset($key)) {
     if (!is_null($key)) {
@@ -2369,21 +2426,246 @@ function normalizeKey($key) {
 }
 
 /*
-** Capability Controller
+**  API Controller **
+**
+**  Structure:
+**    name      Name/ID for the API
+**    url       URL for the API
+**    json      Does API return JSON?
+**    enabled   Is API enabled?
+**    display   Display Name (cosmetic only), defaults to name
+**    apikey    API Key
+**
+**    json_structure is an array of the expected json data returned.
+**        error       if there is an error, information will be in this field
+**        icons       the sub-array containing data
+**        link        the field containing the url for the icon
+**        sizeWxH     the field for the size of the icon in WIDTHxHEIGHT notation
+**        mime        the field containing the mime type for the icon
+**        size        the field for the size of the icon (in pixels, assumes square)
+**    apikey is implemented.
+**
+**
 */
-function addCapability($scope = "global", $capability,$value = false) {
-  global $capabilities;
 
-  $capability = normalizeKey($capability);
-  $capabilities[$scope][$capability] = $value;
+/*  Check if element is valid for API Structure */
+function isValidAPIElement($element) {
+  $retval = false;
+  if (isset($element)) {
+    if (!is_null($element)) {
+      $element = normalizeKey($element);
+      if ($element == "display") { $retval = true; }
+      if ($element == "name") { $retval = true; }
+      if ($element == "url") { $retval = true; }
+      if ($element == "json") { $retval = true; }
+      if ($element == "enabled") { $retval = true; }
+      if ($element == "json_structure") { $retval = true; }
+      if ($element == "apikey") { $retval = true; }
+    }
+  }
+  return $retval;
 }
 
-function getCapability($scope = "global", $capability) {
+/* Add an API */
+function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array(),$display = null,$apikey = null) {
+  global $apiList;
+  $name = normalizeKey($name);
+  if (is_null($display)) { $display = $name; }
+  # TO DO:
+  #   check to see if it already exists
+  $entry = array(
+    "display" => $display,
+    "name" => $name,
+    "url" => $url,
+    "json" => setBoolean($json),
+    "enabled" => setBoolean($enabled),
+    "json_structure" => $json_structure,
+    "apikey" => $apikey,
+  );
+  array_push($apiList,$entry);
+  refreshAPIList();
+}
+
+/*  Return a List of Enabled APIs as an Array */
+function getAPIIndex() {
+  global $apiList;
+  $retval = array();
+  if (!empty($apiList)) {
+    foreach ($apiList as $item) {
+      if (isset($item['name'])) {
+        if (isset($item['enabled'])) {
+          if ($item['enabled']) {
+            array_push($retval,$item['name']);
+          }
+        }
+      }
+    }
+  }
+  return $retval;
+}
+
+/*  Get a List of APIs */
+function getAPIList($displayName = false) {
+  global $apiList;
+  $retval = null;
+  $counter = 0;
+  if (!empty($apiList)) {
+    foreach ($apiList as $item) {
+      if (isset($item['name'])) {
+        $api_name = $item['name'];
+        if ($displayName) { if (isset($item['display'])) { $api_name = $item['display']; } }
+        $api_enabled = $item['enabled'];
+        if (!is_null($api_name)) { 
+          if (!is_null($retval)) { $retval .= ", "; }
+          $retval .= $api_name;
+          if (!$api_enabled) { $retval .= "*"; }
+        }
+      }
+    }
+  }
+  if (is_null($retval)) { if ($displayName) { $retval = "None"; } else { $retval = "none"; } }
+  return $retval;
+}
+
+/*  Refresh API List */
+function refreshAPIList($isenabled = true) {
+  global $apiList; 
+  $count = 0;
+  if (!empty($apiList)) {
+    foreach ($apiList as $item) {
+      if (isset($item['display'])) { $api_display = $item['display']; } else { $api_display = null; }
+      if (isset($item['name'])) { $api_name = $item['name']; } else { $api_name = null; }
+      if (isset($item['url'])) { $api_url = $item['url']; } else { $api_url = null; }
+      if (isset($item['json'])) { $api_json = $item['json']; } else { $api_json = null; }
+      if (isset($item['enabled'])) { $api_enabled = $item['enabled']; } else { $api_enabled = null; }
+      if (isset($item['json_structure'])) { $api_json_structure = $item['json_structure']; } else { $api_json_structure = null; }
+      if (isset($item['apikey'])) { $api_apikey = $item['apikey']; } else { $api_apikey = null; }
+      if (!is_null($api_name)) {
+        if ($isenabled) {
+          if ($api_enabled) { $count++; }
+        } else {
+          $count++;
+        }
+      }
+    }
+  }
+  setItem("api_count",$count);
+}
+
+/*  Return a count of APIs */
+function getAPICount($isenabled = true) {
+  $api_count = getItem("api_count");
+  if (!isset($api_count)) { 
+    refreshAPIList($isenabled);
+    $api_count = getItem("api_count");
+  }
+  return $api_count;
+}
+
+/* Return an API object */
+function getAPI($name) {
+  return lookupAPI('name',$name);
+}
+
+/* Return the Name of a Random API */
+function getRandomAPIName() {
+  global $apiList;
+  $api_name = null;
+  $api_count = getAPICount();
+  $api_index = getAPIIndex();
+  if ($api_count > 0) {
+    shuffle($api_index);
+    $api_name = array_shift($api_index);
+  }
+  return $api_name;
+}
+
+/* Select a Random API */
+function getRandomAPI() {
+  global $apiList;
+  $api_count = getAPICount();
+  $return_object = getEmptyAPIEntry();
+  $flag_selecting = true;
+  if ($api_count > 0) {
+    while ($flag_selecting) {
+      $api_name = array_rand($apiList,1);
+      $return_object = getAPI($api_name);
+      if (!is_null($return_object['name'])) {
+        if ($return_object['enabled']) {
+          $flag_selecting = false;
+        }
+      }
+    }
+  }
+  return $return_object;
+}
+
+/*  Get a Null API Entry */
+function getEmptyAPIEntry() {
+  $return_object = array(
+    "display" => null,
+    "name" => null,
+    "url" => null,
+    "json" => false,
+    "enabled" => false,
+    "json_structure" => array(),
+    "apikey" => null,
+    "verb" => null,
+  );  
+  return $return_object;
+}
+
+/* Lookup API */
+function lookupAPI($element,$value) {
+  global $apiList;
+  $element = normalizeKey($element);
+  $return_object = getEmptyAPIEntry();
+  if (isValidAPIElement($element)) {
+    foreach ($apiList as $item) {
+      if (!is_null($item['name'])) {
+        if (isset($item[$element])) {
+          if (strcasecmp($item[$element], $value) == 0) {
+            $return_object = array();
+            $return_object = $item;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return $return_object;
+}
+
+/*  Populate API URL */
+function getAPIurl($url,$domain,$size = 0,$apikey = null) {
+  if (!is_numeric($size)) { $size = 0; }
+  if ($size == 0) { $size = getConfiguration("global","icon_size"); }
+  
+  $processed_url = $url;
+  if (!is_null($domain)) { $processed_url = str_replace("<DOMAIN>",$domain,$processed_url); }
+  if ($size != 0) { $processed_url = str_replace("<SIZE>",$size,$processed_url); }
+  if (!is_null($apikey)) { $processed_url = str_replace("<APIKEY>",$apikey,$processed_url); }
+  return $processed_url;
+}
+
+/*
+** Capability Controller
+*/
+function addCapability($scope = "global", $capability = null,$value = false) {
   global $capabilities;
-  
-  $capability = normalizeKey($capability);
-  if (isset($capabilities[$scope][$capability])) { $value = $capabilities[$scope][$capability]; } else { $value = null; }
-  
+  if (!is_null($capability)) {
+    $capability = normalizeKey($capability);
+    $capabilities[$scope][$capability] = $value;
+  }
+}
+
+function getCapability($scope = "global", $capability = null) {
+  global $capabilities;
+  $value = false;
+  if (!is_null($capability)) {
+    $capability = normalizeKey($capability);
+    if (isset($capabilities[$scope][$capability])) { $value = $capabilities[$scope][$capability]; }
+  }
   return $value;
 }
 
@@ -2392,12 +2674,14 @@ function getCapability($scope = "global", $capability) {
 */
 function addBlocklist($value) {
   global $blockList;
-  
+  $retval = false;
   if (isset($value)) {
     if (!searchBlocklist($value)) {
       array_push($blockList,strtolower($value));
+      $retval = true;
     }
   }
+  return $retval;
 }
 
 function searchBlocklist($value) {
@@ -2406,7 +2690,7 @@ function searchBlocklist($value) {
   $retval = false;
   if (isset($value)) {
     foreach ($blockList as $item) {
-      if (strtolower($item) == strtolower($value)) {
+      if (strcasecmp($item, $value) == 0) {
         $retval = true;
         break;
       }
@@ -2453,7 +2737,8 @@ function getItem($name,$value = null) {
 */
 function addStatistic($name,$value = null) {
   global $statistics;
-  
+  # TO DO:
+  #   check to see if it already exists
   $name = normalizeKey($name);
   if (is_null($value)) { $statistics[$name] = 0; } else { $statistics[$name] = $value; }
 }
@@ -2489,12 +2774,16 @@ function getStatistic($name) {
   return $retval;
 }
 
+function deleteStatistic($name) {
+  # TO DO:
+  #   write function
+}
+
 /*
 **  Processed Controller
 */
 function isValidProcessElement($element) {
   $retval = false;
-  
   if (isset($element)) {
     if (!is_null($element)) {
       $element = normalizeKey($element);
@@ -2508,6 +2797,9 @@ function isValidProcessElement($element) {
       if ($element == "overwrite") { $retval = true; }
       if ($element == "saved") { $retval = true; }
       if ($element == "elapsed") { $retval = true; }
+      if ($element == "state") { $retval = true; }
+      if ($element == "updated") { $retval = true; }
+      if ($element == "accepted") { $retval = true; }
     }
   }
   return $retval;
@@ -2515,18 +2807,16 @@ function isValidProcessElement($element) {
 
 function addProcessEntry($url) {
   global $processed;
-
   $entry = getEmptyProcessEntry();
   $entry['url'] = normalizeKey($url);
-  
+  # TO DO:
+  #   check to see if it already exists
   array_push($processed,$entry);
 }
 
 function updateProcessEntry($url,$element,$value = null) {
   global $processed;
-  
   $retval = false;
-      
   $entry = getProcessEntry('url',normalizeKey($url));
   if (isset($entry['url'])) {
     $element = normalizeKey($element);
@@ -2543,7 +2833,6 @@ function updateProcessEntry($url,$element,$value = null) {
 function updateProcessRecord($entry) {
   global $processed;
   $retval = false;
-  
   if (isset($entry['url'])) {
     $found_key = array_search($entry['url'], array_column($processed, 'url'));
     if ($found_key !== false) {
@@ -2555,33 +2844,54 @@ function updateProcessRecord($entry) {
 }
 
 function getEmptyProcessEntry() {
-  $return_object = array();
-  $return_object['url'] = null;
-  $return_object['favicon'] = null;
-  $return_object['icontype'] = null;
-  $return_object['method'] = null;
-  $return_object['local'] = null;
-  $return_object['saved'] = false;
-  $return_object['elapsed'] = 0;
-  $return_object['overwrite'] = false;
-  $return_object['hash'] = null;
-  $return_object['tries'] = 0;
-
+  $return_object = array(
+    "url" => null,
+    "favicon" => null,
+    "icontype" => null,
+    "method" => null,
+    "local" => null,
+    "saved" => false,
+    "elapsed" => 0,
+    "overwrite" => false,
+    "hash" => null,
+    "tries" => 0,
+    "state" => STATE_WANTED,
+    "updated" => false,
+    "accepted" => false,
+  );
   return $return_object;
+}
+
+function isIconWanted($url) {
+  $retval = false;
+  $object = getProcessEntry($url);
+  if (!empty($object)) {
+    if (isset($object['state'])) { if ($object['state'] == STATE_WANTED) { $retval = true; } }
+  }
+  return $retval;
+}
+
+function isIconAccepted($url) {
+  $retval = false;
+  $object = getProcessEntry($url);
+  if (!empty($object)) {
+    if ((isset($object['state'])) && (isset($object['accepted']))) {
+      if (($object['state'] == STATE_FOUND) && ($object['accepted'])) {
+        $retval = true;
+      }
+    }
+  }
+  return $retval;
 }
 
 function getProcessEntry($element,$value) {
   global $processed;
-  
   $return_object = getEmptyProcessEntry();
-  
   $element = normalizeKey($element);
-  
   foreach ($processed as $item) {
     if (!is_null($item['url'])) {
       if (isset($item[$element])) {
         if (strcasecmp($item[$element], $value) == 0) {
-          $return_object = array();
           $return_object = $item;
           break;
         }
@@ -2596,7 +2906,6 @@ function getProcessEntry($element,$value) {
 */
 function isValidLastLoadElement($element) {
   $retval = false;
-  
   if (isset($element)) {
     if (!is_null($element)) {
       $element = normalizeKey($element);
@@ -2608,14 +2917,14 @@ function isValidLastLoadElement($element) {
       if ($element == "protocol") { $retval = true; }
       if ($element == "content") { $retval = true; }
       if ($element == "hash") { $retval = true; }
+      if ($element == "valid") { $retval = true; }
     }
   }
   return $retval;
 }
 
-function isLoadLoadResultValid() {
+function isLastLoadResultValid() {
   global $lastLoad;
-  
   $retval = false;
   if (isset($lastLoad['valid'])) {
     if (is_bool($lastLoad['valid'])) {
@@ -2627,55 +2936,51 @@ function isLoadLoadResultValid() {
 
 function lastLoadResult($url = null,$method = null,$content_type = null,$http_code = null,$scheme = null,$protocol = null,$content = null) {
   global $lastLoad;
-
-  $lastLoad = array();
-  $lastLoad['url'] = $url;
-  $lastLoad['method'] = $method;
-  $lastLoad['content_type'] = $content_type;
-  $lastLoad['http_code'] = $http_code;
-  $lastLoad['scheme'] = $scheme;
-  $lastLoad['protocol'] = $protocol;
-  $lastLoad['content'] = $content;
-  $lastLoad['hash'] = md5($content);
-  if (!is_null($url)) {
-    $lastLoad['valid'] = true;
-  } else {
-    $lastLoad['valid'] = false;
-  }
+  $retval = false;
+  if (!is_null($url)) { $retval = true; }
+  $lastLoad = array(
+    "url" => $url,
+    "method" => $method,
+    "content_type" => $content_type,
+    "http_code" => $http_code,
+    "scheme" => $scheme,
+    "protocol" => $protocol,
+    "content" => $content,
+    "hash" =>  md5($content),
+    "valid" => setBoolean($retval),
+  );
+  return $retval;
 }
 
 function zeroLastLoadResult() {
   global $lastLoad;
-  
   $lastLoad = getEmptyLastLoadResult();
 }
 
 function getEmptyLastLoadResult() {
-  $entry = array();
-  $entry['valid'] = false;
-  $entry['url'] = null;
-  $entry['method'] = null;
-  $entry['content_type'] = null;
-  $entry['http_code'] = null;
-  $entry['scheme'] = null;
-  $entry['protocol'] = null;
-  $entry['content'] = null;
-  $entry['hash'] = null;
-  
+  $entry = array(
+    "url" => null,
+    "method" => null,
+    "content_type" => null,
+    "http_code" => null,
+    "scheme" => null,
+    "protocol" => null,
+    "content" => null,
+    "hash" =>  null,
+    "valid" => false,  
+  );
   return $entry;
 }
 
 function getLastLoadResult($element = null) {
   global $lastLoad;
-  
+  $return_data = getEmptyLastLoadResult();
   if (is_null($element)) {
     $return_data = $lastLoad;
   } else {
     $element = normalizeKey($element);
     if (isset($lastLoad[$element])) {
       $return_data = $lastLoad[$element];
-    } else {
-      $return_data = getEmptyLastLoadResult();
     }
   }
   return $return_data;
@@ -2833,15 +3138,15 @@ function stopTimer($name,$elapsed = false) {
 }
 
 function getEmptyTimer() {
-  $entry = array();
-  $entry['name'] = null;
-  $entry['start'] = null;
-  $entry['finish'] = null;
-  $entry['type'] = TIME_TYPE_ANY;
-  $entry['elapsed'] = -1;
-  $entry['elapsed_hr'] = -1;
-  $entry['running'] = false;
-
+  $entry = array(
+    "name" => null,
+    "start" => null,
+    "finish" => null,
+    "type" => TIME_TYPE_ANY,
+    "elapsed" => -1,
+    "elapsed_hr" => -1,
+    "running" => false,
+  );
   return $entry;
 }
 
@@ -2983,4 +3288,86 @@ function debugDumpStructures() {
       }
     }
   }
+}
+
+/*  Validate Configuration */
+function validateConfiguration() {
+  debugSection("validateConfiguration");
+  
+  validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","allow_octet_stream",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","icon_size",CONFIG_TYPE_NUMERIC,RANGE_ICON_SIZE_MINIMUM,RANGE_ICON_SIZE_MAXIMUM);
+  validateConfigurationSetting("global","tenacious",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("console","enabled",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
+  validateConfigurationSetting("console","timestamp",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
+  validateConfigurationSetting("debug","dump_structures",CONFIG_TYPE_BOOLEAN);  
+  validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
+  validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","remove_tld",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","http_timeout",CONFIG_TYPE_NUMERIC,RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","http_timeout_connect",CONFIG_TYPE_NUMERIC,RANGE_HTTP_CONNECT_TIMEOUT_MINIMUM,RANGE_HTTP_CONNECT_TIMEOUT_MAXIMUM);
+  validateConfigurationSetting("http","maximum_redirects",CONFIG_TYPE_NUMERIC,RANGE_HTTP_REDIRECTS_MINIMUM,RANGE_HTTP_REDIRECTS_MAXIMUM);
+  validateConfigurationSetting("http","try_homepage",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("http","use_buffering",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("http","default_protocol_https",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("http","default_protocol_fallback",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("logging","append",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("logging","enabled",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("logging","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
+  validateConfigurationSetting("logging","timestamp",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
+  
+  if (getConfiguration("logging","enabled")) {
+    if (is_null(getConfiguration("logging","pathname"))) {
+      writeLog("validateConfiguration: pathname is not set, disabling logging option",TYPE_TRACE);
+      setConfiguration("logging","enabled",false);
+    }
+    if (getConfiguration("logging","timestamp")) {
+      if (is_null(getConfiguration("logging","timestampformat"))) {
+        writeLog("validateConfiguration: timestampformat is not set, disabling logging timestamp",TYPE_TRACE);
+        setConfiguration("logging","timestamp",false);
+      }
+    }
+    if (getConfiguration("logging","append")) {
+      if (is_null(getConfiguration("logging","separator"))) {
+        setConfiguration("logging","separator","* * *");
+      }
+    }
+  }
+
+  if (getConfiguration("console","enabled")) {
+    if (getConfiguration("console","timestamp")) {
+      if (is_null(getConfiguration("console","timestampformat"))) {
+        writeLog("validateConfiguration: timestampformat is not set, disabling console timestamp",TYPE_TRACE);
+        setConfiguration("console","timestamp",false);
+      }
+    }
+  }
+    
+  if (getConfiguration("files","store")) {
+    if (is_null(getConfiguration("files","local_path"))) {
+        writeLog("validateConfiguration: local_path is not set, disabling store option",TYPE_TRACE);
+        setConfiguration("files","store",false);
+    } else {
+      if (!file_exists(getConfiguration("files","local_path"))) {
+        writeLog("validateConfiguration: local_path is invalid, disabling store option",TYPE_TRACE);
+        setConfiguration("files","store",false);
+      }
+    }
+  }
+  
+  if (getConfiguration("curl","enabled")) {
+    if (!getCapability("php","curl")) {
+      writeLog("validateConfiguration: curl is enabled but not supported, disabling",TYPE_TRACE);
+      setConfiguration("curl","enabled",false);
+    }
+  }
+  debugSection();
 }

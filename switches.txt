@@ -23,7 +23,9 @@ Lists can be separated with space, comma or semi-colon.
 --removetld                 Remove top level domain from filename. (default is false)
 --noremovetld               Don't remove top level domain from filename.
 --tenacious                 Try all enabled APIs until success. (default is false)
---notenacious               Try a random API
+--notenacious               Try a random API.
+--allowoctetstream          Allow MimeType 'application/octet-stream'. (default is true)
+--disallowoctetstream       Block MimeType 'application/octet-stream' for icons.
 --consolemode               Force console output.
 --noconsolemode             Force HTML output.
 --debug                     Enable debug mode.
