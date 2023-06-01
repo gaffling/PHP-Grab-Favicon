@@ -6,6 +6,7 @@ Lists can be separated with space, comma or semi-colon.
 --configfile=FILE           Pathname to read for configuration.
 --list=FILE/LIST            Pathname or a delimited list of URLs to check.
 --blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.
+--validtypes=FILE/LIST      Valid icon types (default is gif,webp,png,ico,bmp,svg,jpg)
 --logfile=FILE              Pathname for log file (default is get-fav.log)
 --path=PATH                 Location to store icons (default is ./)
 --size=NUMBER               Try to get icon size (default is 16)
@@ -21,6 +22,8 @@ Lists can be separated with space, comma or semi-colon.
 --skip                      Skip local favicons.
 --removetld                 Remove top level domain from filename. (default is false)
 --noremovetld               Don't remove top level domain from filename.
+--tenacious                 Try all enabled APIs until success. (default is false)
+--notenacious               Try a random API
 --consolemode               Force console output.
 --noconsolemode             Force HTML output.
 --debug                     Enable debug mode.
