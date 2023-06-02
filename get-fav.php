@@ -1,97 +1,23 @@
 <?php
 /*
 
-Should there be a change in the overall flow of things?
-  (depending on options)
-    --checklocal  --nochecklocal
-    --saveifnew  (requires --checklocal and --save)
-  1. Check if icon is on disk
-      if it is, get the md5hash and type
-        if type is not in the 'accepted' list or hash is in the blocklist, mark it as 'wanted'
-      if the icon is not present, mark it as 'wanted'
-     NOTE: This will only work if:
-          1. icons are named how the current settings name things.
-          2. The hash/subfolder option hasn't been used.
-     (if checklocal is not enabled, it will always be marked as wanted)     
-  2. If wanted, try to get favicon
-  3. try different methods to get the favicon, stop when the following is true:
-      icon is a type that is in the accept list
-      icon is not in the blocklist
-  4. When saving, if the new icon hash is the same as the old, skip
-  5. HTML Mode:
-        can show the icon either locally (base64) or with a reference
-       Console:
-        if save is enabled, it shows the save pathname.
-        if save is not enabled, it shows the url for the icon in the format of "domain:url"
-  6. Option to output a text file with the urls for the icons
-        preformat for curl or wget?
-        
-  
-    the internal structure will need 'status' values, maybe more than one
-        wanted
-        found
-        accepted
-        rejected
-        
-    perhaps wrapper it so code can be:
-        if (siteIcon($url) == WANTED) {
-          
+-----------------------------
+CHANGELOG
 
-API Improvements:      
-  For APIs that use JSON:
-    Currently the JSON structure is too arbitrary.
-      For example:
-            array(2) {
-              ["domain"]=>
-              string(11) "netflix.com"
-              ["icons"]=>
-              array(2) {
-                [0]=>
-                array(1) {
-                  ["src"]=>
-                  string(68) "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.ico"
-                }
-                [1]=>
-                array(1) {
-                  ["src"]=>
-                  string(68) "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.png"
-                }
-              }
-            }
-            
-            other fields with the src record:
-              sizes (WIDTHxHEIGHT)
-              type
-            
-      Presently it will just blindly grab [icons][0][src]
-        it should check the extensions of the URLs offered against the accepted types.
-        
-      so instead of "json_structure" as it now:
-        json_icon_name=icons
-        json_link=src
-        
-        So in this case, we would iterate through the icons part of the json and check each source,
-          if the icon is acceptable (allowed format, not in blocklist), we would stop and continue
-          if no icon is selected skip or fall back to the next API (if tenscious)
-        
-      there also needs to be provision for error handling:
-        json_error=error
-        
-      
-        favicongrabber
-          {"error":"General API error."}
-            
-  
-
-
-Changelog:
-  rewrote API JSON parser
+NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
+-----------------------------
+  (In Progress) Preparing to make alerations to program flow, see CHANGES section below.
+  Added HTTP Code parser (lookupHTTPResponse), returns an array:
+      ok (boolean)
+      code (string) [will never be null even if the http code was]
+      description (string) [will never be null]
+  rewrote API JSON parser (change to API .ini format)
   added --allowoctetstream / --disallowoctetstream to block potentially invalid icons
     NOTE: If the more advanced capabilities are not available (curl/mime & content type identification) this may block good data if set to disallow
   Some HTTP error handling added
   if VERBOSE, the PHP version will be logged
   if VERBOSE & Debug capabilities and options will be logged
-  minor changes for PHP 8.2 compatiblity
+  minor changes for PHP 8.2 compatibility
   added tenacious mode will try all APIs until it gets a successful result
   added precision timers for internal use
   it will now warn if, due to the PHP configuration, some functions that identify formats are not available that results may not be that great
@@ -128,37 +54,82 @@ Changelog:
     timestamp option
     append option
 
+-----------------------------
 TO DO:
+-------------------------------------
+  Add option to show running configuration and exit
+  Add option to load API ini from a pathname
+  Add option to actually check icon on disk's size/type? (post save)
+  Change: RegEx search should have simliar path to the new json parser as there can be multiple formats/icons defined
   Add --silent (console mode only)
-  add another fallback:
+  Add another fallback:
     try to identify file (if needed download a temporary file), return mime type using fopen/fread/file_get_contents
-  http mode:
+  Update HTTP Mode
     parameters via query string or GET/POST
     show icons, if it has a protocol it should use "img src" to the URL not do a base64.
-  api:
-    definition:
-      apikey
-      get/post
-    general:
-      option for a delay (set time or a range for random) between icon requests to prevent hammering
-  blocklist of icons (for example if the apis return archive.org's icon)
+  Add option for APIs for a delay between requests?
+  Add Blocklist for Icons
     list of md5 hashes
-    skipped if blocklist is empty or option is goven
-    --blocklist=(list of hashes or file with hashes)
-    --enableblocklist
-    --disableblocklist
-  optional query string/form support for options
-    default will be disabled for security reasons
-  save sub-folders
-    hash or alpha
-  more error checking
+      skipped if blocklist is empty or option is goven
+        --blocklist=(list of hashes or file with hashes)
+        --enableblocklist
+        --disableblocklist
+  Add save sub-folders
+    md5 hash or by alpha
+  Add more error checking
   should configuration structure be typed automatically (done at set)?
 
 
+-----------------------------
 ISSUES:
+-----------------------------
   medium.ico is often octet-stream and doesn't seem to work:
     md5 989fc29016f391122a2e735ef8f7ad31
+    added an option to disallow octet-streams
     
+
+-----------------------------
+CHANGES
+-----------------------------
+Should optimize processing a bit, right now things are reloaded when they don't need to be.
+  New Options: --checklocal  --nochecklocal --saveifnew  (requires --checklocal and --save)
+  
+  Flow:
+  
+  1. Check if icon is on disk
+      if it is, get the md5hash and type
+        if type is not in the 'accepted' list or hash is in the blocklist, mark it as 'wanted'
+      if the icon is not present, mark it as 'wanted'
+     NOTE: This will only work if:
+          1. icons are named how the current settings name things.
+          2. The hash/subfolder option hasn't been used.
+     (if checklocal is not enabled, it will always be marked as wanted)     
+  2. If wanted, try to get favicon
+  3. try different methods to get the favicon, stop when the following is true:
+      icon is a type that is in the accept list
+      icon is not in the blocklist
+  4. When saving, if the new icon hash is the same as the old, skip
+  5. HTML Mode:
+        can show the icon either locally (base64) or with a reference
+       Console:
+        if save is enabled, it shows the save pathname.
+        if save is not enabled, it shows the url for the icon in the format of "domain:url"
+  6. Option to output a text file with the urls for the icons
+        preformat for curl or wget?
+        
+  
+  Notes:
+    the internal structure will need 'status' values, maybe more than one
+        wanted
+        found
+        
+    Seperate bool:    
+        accepted
+
+        
+    perhaps wrapper it so code can be:
+        if (siteIcon($url) == WANTED) {
+
     
   
 PHP Grab Favicon
@@ -230,7 +201,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202306011529');
+define('PROGRAM_VERSION', '202306021445');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -282,6 +253,8 @@ define('RANGE_HTTP_REDIRECTS_MINIMUM', 0);
 define('RANGE_HTTP_REDIRECTS_MAXIMUM', 50);
 define('RANGE_ICON_SIZE_MINIMUM', 16);
 define('RANGE_ICON_SIZE_MAXIMUM', 512);
+define('RANGE_HTTP_RESPONSE_MINIMUM', 100);
+define('RANGE_HTTP_RESPONSE_MAXIMUM', 523);
 
 /* Logging Levels */
 define('TYPE_ALL', 1);
@@ -731,6 +704,7 @@ if (getConfiguration("global","api")) {
 $display_API_list = getAPIList();
 if (is_null($display_API_list)) { $display_API_list = "none"; }
 
+
 /* Validate URL List */
 writeLog("Validating URL List",TYPE_DEBUGGING);
 validateURLList();
@@ -835,438 +809,447 @@ function grap_favicon($url) {
     set_time_limit(0); // 0 = no timelimit
   }
   
-  addProcessEntry($url);
+  if (addProcessEntry($url)) {
+    writeLog("Starting Processing For: '$url'",TYPE_DEBUGGING);
 
-	// Get the Domain from the URL
-  $parsed_url = parse_url($url);
-  $core_domain = null;
-  $protocol = "http";
-  $domain = $url;
-  $url_port = null;
-  $url_user = null;
-  $url_password = null;
-  $url_path = null;
-  
-  if (!empty($parsed_url)) {
+    // Get the Domain from the URL
+    $parsed_url = parse_url($url);
+    $core_domain = null;
+    $protocol = "http";
     $domain = $url;
-    if (isset($parsed_url['scheme'])) { $protocol = $parsed_url['scheme']; };
-    if (isset($parsed_url['host'])) { $domain = $parsed_url['host']; }
-    if (isset($parsed_url['port'])) { $url_port = $parsed_url['port']; } 
-    if (isset($parsed_url['user'])) { $url_user = $parsed_url['user']; } 
-    if (isset($parsed_url['pass'])) { $url_password = $parsed_url['pass']; } 
-    if (isset($parsed_url['path'])) { $url_path = $parsed_url['path']; } 
+    $url_port = null;
+    $url_user = null;
+    $url_password = null;
+    $url_path = null;
     
-    # TO DO:
-    #   should see if this is handling more complex names correctly:
-    #     e.g. cdn.subdomain.company.com
-    #          company.com:port
-    
-    // Check Domain
-    $domainParts = explode('.', $domain);
-    if (empty($domainParts)) {
-        $core_domain = $domain;
-      } else {
-      if(count($domainParts) >= 2) {
-        $core_domain = $domainParts[count($domainParts)-2];
-      }
+    if (!empty($parsed_url)) {
+      $domain = $url;
+      if (isset($parsed_url['scheme'])) { $protocol = $parsed_url['scheme']; };
+      if (isset($parsed_url['host'])) { $domain = $parsed_url['host']; }
+      if (isset($parsed_url['port'])) { $url_port = $parsed_url['port']; } 
+      if (isset($parsed_url['user'])) { $url_user = $parsed_url['user']; } 
+      if (isset($parsed_url['pass'])) { $url_password = $parsed_url['pass']; } 
+      if (isset($parsed_url['path'])) { $url_path = $parsed_url['path']; } 
       
-      if(count($domainParts) == 3 and $domainParts[0]!='www') {
-        // With Subdomain (if not www)
-        $domain = $domainParts[0].'.'.
-                  $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-      } else if (count($domainParts) >= 2) {
-        // Without Subdomain
-        $domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-      } else {
-        // Without http(s)
-        $domain = $url;
-      }
-    }
-  }
-  
-  # TO DO:
-  #   if option is enabled:
-  #     check if icon is on disk
-  #       get content type
-  #       get hash
-  #       test against icon and block lists
-  #   
-  writeLog("Processing $url, Domain: $domain using $protocol",TYPE_DEBUGGING);
-
-  if ($trySelf) {
-    $method = "direct";
-    
-    // Try Direct Load
-    if (empty($favicon)) {
-      $favicon = addFavIconToURL($url);
-      writeLog("Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
-      $attemptCount++;
-      $fileExtension = getIconExtension($favicon,false);
-      if (!$fileExtension['valid']) {
-        writeLog("Failed Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
-        unset($favicon);
-      }
-    }
-    
-    if (empty($favicon)) {
-      // Load Page
-      $html = load($url);
-
-      if (empty($html)) {
-        writeLog("No data received",TYPE_WARNING);
-      } else {
-        $method = "regex";
-        $attemptCount++;
-        writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
-        writeLog("Attempting RegEx Match",TYPE_DEBUGGING);
-        // Find Favicon with RegEx
-        $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
-        if (@preg_match($regExPattern, $html, $matchTag)) {
-          writeLog("RegEx Initial Pattern Matched\n" . print_r($matchTag,true),TYPE_DEBUGGING);
-          $regExPattern = '/href=(\'|\")(.*?)\1/i';
-          if (isset($matchTag[1]) && @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
-            writeLog("RegEx Secondary Pattern Matched",TYPE_DEBUGGING);
-            if (isset($matchUrl[2])) {
-              writeLog("Found Match, Building Link",TYPE_DEBUGGING);
-              // Build Favicon Link
-              $favicon = convertRelativeToAbsolute(trim($matchUrl[2]), $protocol . '://'.$domain.'/');
-              writeLog("Located Icon in HTML as '$favicon'",TYPE_DEBUGGING);
-              writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
-            } else {
-              writeLog("Failed To Find Match",TYPE_DEBUGGING);
-            }
-          } else {
-            writeLog("RegEx Secondary Pattern Failed To Match",TYPE_DEBUGGING);
-          }
+      # TO DO:
+      #   should see if this is handling more complex names correctly:
+      #     e.g. cdn.subdomain.company.com
+      #          company.com:port
+      
+      // Check Domain
+      $domainParts = explode('.', $domain);
+      if (empty($domainParts)) {
+          $core_domain = $domain;
         } else {
-          writeLog("RegEx Initial Pattern Failed To Match",TYPE_DEBUGGING);
+        if(count($domainParts) >= 2) {
+          $core_domain = $domainParts[count($domainParts)-2];
+        }
+        
+        if(count($domainParts) == 3 and $domainParts[0]!='www') {
+          // With Subdomain (if not www)
+          $domain = $domainParts[0].'.'.
+                    $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
+        } else if (count($domainParts) >= 2) {
+          // Without Subdomain
+          $domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
+        } else {
+          // Without http(s)
+          $domain = $url;
         }
       }
+    }
+    
+    # TO DO:
+    #   if option is enabled:
+    #     check if icon is on disk
+    #       get content type
+    #       get hash
+    #       test against icon and block lists
+    #   
+    writeLog("Protocol: $protocol, Domain: $domain",TYPE_DEBUGGING);
 
-      // If there is no Match: Try if there is a Favicon in the Root of the Domain
-      if (empty($favicon)) {
-        $method = "direct/root";
-        $favicon = addFavIconToURL($protocol . '://'.$domain);
-        writeLog("Attempting Direct Match using '$favicon'",TYPE_DEBUGGING);
-
-        // Try to Load Favicon
-        # if ( !@getimagesize($favicon) ) {
-        # https://www.php.net/manual/en/function.getimagesize.php
-        # Do not use getimagesize() to check that a given file is a valid image.
+    if ($trySelf) {
+      $method = "direct";
+      
+      // Try Direct Load
+      if (isIconWanted($url)) {
+        $favicon = addFavIconToURL($url);
+        writeLog("Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
         $attemptCount++;
-        $fileExtension = getIconExtension($favicon,false);
-        if (!$fileExtension['valid']) {
-          writeLog("Failed Direct Match using '$favicon'",TYPE_DEBUGGING);
+        $flag_accepted = checkIconAcceptance($favicon);
+        if ($flag_accepted) {
+          updateProcessEntry($url,"accepted",true);
+          updateProcessEntry($url,"state",STATE_FOUND);
+          writeLog("Direct Load Attempt using '$favicon' succeeded",TYPE_DEBUGGING);
+        } else {
+          updateProcessEntry($url,"accepted",false);
+          updateProcessEntry($url,"state",STATE_WANTED);
+          writeLog("Direct Load Attempt using '$favicon' failed",TYPE_DEBUGGING);
           unset($favicon);
         }
       }
-    } // END If $trySelf == TRUE ONLY USE APIs
-  }
-
-  // If nothing works: Get the Favicon from API
-  if ((!isset($favicon)) || (empty($favicon))) {
-    $api_count = getAPICount();
-    
-    writeLog("Falling Back to API, $api_count are defined and enabled",TYPE_DEBUGGING);
-    
-    if ($api_count > 0) {
-      $selectedAPIList = array();
-      $api_attempt = 0;
-      $api_max_attempts = 0;
       
-      if (($api_count > 1) && (getConfiguration("global","tenacious"))) {
-        writeLog("Randomly Trying Up To $api_count APIs",TYPE_DEBUGGING);
-        $selectedAPIList = getAPIIndex();
-        if (!empty($selectedAPIList)) {
-          shuffle($selectedAPIList);
+      if (empty($favicon)) {
+        // Load Page
+        $html = load($url);
+
+        if (empty($html)) {
+          writeLog("No data received",TYPE_WARNING);
+        } else {
+          $method = "regex";
+          $attemptCount++;
+          # TO DO:
+          #   this needs to be a loop as there can be multiple types defined
+          writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
+          writeLog("Attempting RegEx Match",TYPE_DEBUGGING);
+          // Find Favicon with RegEx
+          $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
+          if (@preg_match($regExPattern, $html, $matchTag)) {
+            writeLog("RegEx Initial Pattern Matched\n" . print_r($matchTag,true),TYPE_DEBUGGING);
+            $regExPattern = '/href=(\'|\")(.*?)\1/i';
+            if (isset($matchTag[1]) && @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
+              writeLog("RegEx Secondary Pattern Matched",TYPE_DEBUGGING);
+              if (isset($matchUrl[2])) {
+                writeLog("Found Match, Building Link",TYPE_DEBUGGING);
+                // Build Favicon Link
+                $favicon = convertRelativeToAbsolute(trim($matchUrl[2]), $protocol . '://'.$domain.'/');
+                writeLog("Located Icon in HTML as '$favicon'",TYPE_DEBUGGING);
+                writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
+              } else {
+                writeLog("Failed To Find Match",TYPE_DEBUGGING);
+              }
+            } else {
+              writeLog("RegEx Secondary Pattern Failed To Match",TYPE_DEBUGGING);
+            }
+          } else {
+            writeLog("RegEx Initial Pattern Failed To Match",TYPE_DEBUGGING);
+          }
         }
-        $api_max_attempts = count($selectedAPIList);
-      }
-      # If tenacious doesn't get a list (or there's just one api) fallback to regular
-      if (empty($selectedAPIList)) {
-        writeLog("Selecting API",TYPE_DEBUGGING);
-        $api_max_attempts = 1;
-        array_push($selectedAPIList,getRandomAPIName());
-      }
-      foreach ($selectedAPIList as $selectedAPI) {
-        $method = "api";
-        $api_valid = true;
-        $flag_accepted = false;
+
+        // If there is no Match: Try if there is a Favicon in the Root of the Domain
+        if (empty($favicon)) {
+          $method = "direct/root";
+          $favicon = addFavIconToURL($protocol . '://'.$domain);
+          writeLog("Attempting Direct Match using '$favicon'",TYPE_DEBUGGING);
+
+          // Try to Load Favicon
+          # if ( !@getimagesize($favicon) ) {
+          # https://www.php.net/manual/en/function.getimagesize.php
+          # Do not use getimagesize() to check that a given file is a valid image.
+          $attemptCount++;
+          $fileExtension = getIconExtension($favicon,false);
+          if (!$fileExtension['valid']) {
+            writeLog("Failed Direct Match using '$favicon'",TYPE_DEBUGGING);
+            unset($favicon);
+          }
+        }
+      } // END If $trySelf == TRUE ONLY USE APIs
+    }
+
+    // If nothing works: Get the Favicon from API
+    if ((!isset($favicon)) || (empty($favicon))) {
+      $api_count = getAPICount();
+      
+      writeLog("Falling Back to API, $api_count are defined and enabled",TYPE_DEBUGGING);
+      
+      if ($api_count > 0) {
+        $selectedAPIList = array();
+        $api_attempt = 0;
+        $api_max_attempts = 0;
         
-        writeLog("Attempting To Load API Record: '$selectedAPI'",TYPE_SPECIAL);
-        $selectAPI = getAPI($selectedAPI);
-        
-        if (isset($selectAPI['display'])) { $api_display = $selectAPI['display']; } else { $api_display = null; }
-        if (isset($selectAPI['name'])) { $api_name = $selectAPI['name']; } else { $api_name = null; }
-        if (isset($selectAPI['url'])) { $api_url = $selectAPI['url']; } else { $api_url = null; }
-        if (isset($selectAPI['json'])) { $api_json = $selectAPI['json']; } else { $api_json = null; }
-        if (isset($selectAPI['enabled'])) { $api_enabled = $selectAPI['enabled']; } else { $api_enabled = null; }
-        if (isset($selectAPI['json_structure'])) { $api_json_structure = $selectAPI['json_structure']; } else { $api_json_structure = null; }
-        if (isset($selectAPI['apikey'])) { $api_key = $selectAPI['apikey']; } else { $api_key = null; }
-        
-        if ((is_null($api_name)) || (is_null($api_url)) || (is_null($api_enabled)) || (is_null($api_json))) { $api_valid = false; }
-        
-        if ($api_valid) {
-          $api_attempt++;
-          $favicon = null;
-          if ($api_enabled) {
-            $method = "api:$api_name";
-            if (is_null($api_display)) { $api_display = $api_name; }
-            $attemptCount++;
-            if ($api_max_attempts > 1) { $section_prefix = "$api_attempt: "; } else { $section_prefix = "API: ";  }
-            writeLog($section_prefix . "$method: Selected '$api_display'",TYPE_DEBUGGING);
-            $api_request = getAPIurl($api_url,$domain,$iconSize,$api_key);
-            if (isset($api_request)) {
-              if ($api_json) {
-                writeLog($section_prefix . "$method: Getting JSON Data for '$api_request'",TYPE_DEBUGGING);
-                $api_data = load($api_request);
-                if (isLastLoadResultValid()) {
-                  $http_code = getLastLoadResult("http_code");
-                  if (is_null($http_code)) {
-                    writeLog($section_prefix . "$method: API returned a null http response code",TYPE_TRACE);
-                  } else {
-                    if ($http_code >= 400) {
-                      writeLog($section_prefix . "$method: API returned an error=$http_code",TYPE_TRACE);
+        if (($api_count > 1) && (getConfiguration("global","tenacious"))) {
+          writeLog("Randomly Trying Up To $api_count APIs",TYPE_DEBUGGING);
+          $selectedAPIList = getAPIIndex();
+          if (!empty($selectedAPIList)) {
+            shuffle($selectedAPIList);
+          }
+          $api_max_attempts = count($selectedAPIList);
+        }
+        # If tenacious doesn't get a list (or there's just one api) fallback to regular
+        if (empty($selectedAPIList)) {
+          writeLog("Selecting API",TYPE_DEBUGGING);
+          $api_max_attempts = 1;
+          array_push($selectedAPIList,getRandomAPIName());
+        }
+        foreach ($selectedAPIList as $selectedAPI) {
+          $method = "api";
+          $api_valid = true;
+          $flag_accepted = false;
+          
+          writeLog("Attempting To Load API Record: '$selectedAPI'",TYPE_SPECIAL);
+          $selectAPI = getAPI($selectedAPI);
+          
+          if (isset($selectAPI['display'])) { $api_display = $selectAPI['display']; } else { $api_display = null; }
+          if (isset($selectAPI['name'])) { $api_name = $selectAPI['name']; } else { $api_name = null; }
+          if (isset($selectAPI['url'])) { $api_url = $selectAPI['url']; } else { $api_url = null; }
+          if (isset($selectAPI['json'])) { $api_json = $selectAPI['json']; } else { $api_json = null; }
+          if (isset($selectAPI['enabled'])) { $api_enabled = $selectAPI['enabled']; } else { $api_enabled = null; }
+          if (isset($selectAPI['json_structure'])) { $api_json_structure = $selectAPI['json_structure']; } else { $api_json_structure = null; }
+          if (isset($selectAPI['apikey'])) { $api_key = $selectAPI['apikey']; } else { $api_key = null; }
+          
+          if ((is_null($api_name)) || (is_null($api_url)) || (is_null($api_enabled)) || (is_null($api_json))) { $api_valid = false; }
+          
+          if ($api_valid) {
+            $api_attempt++;
+            $favicon = null;
+            if ($api_enabled) {
+              $method = "api:$api_name";
+              if (is_null($api_display)) { $api_display = $api_name; }
+              $attemptCount++;
+              if ($api_max_attempts > 1) { $section_prefix = "$api_attempt: "; } else { $section_prefix = "API: ";  }
+              writeLog($section_prefix . "$method: Selected '$api_display'",TYPE_DEBUGGING);
+              $api_request = getAPIurl($api_url,$domain,$iconSize,$api_key);
+              if (isset($api_request)) {
+                if ($api_json) {
+                  writeLog($section_prefix . "$method: Getting JSON Data for '$api_request'",TYPE_DEBUGGING);
+                  $api_data = load($api_request);
+                  if (isLastLoadResultValid()) {
+                    $http_code = getLastLoadResult("http_code");
+                    $RequestData = lookupHTTPResponse($http_code);
+                    if (!$RequestData['ok']) {
+                      writeLog($section_prefix . "$method: API returned an error=" . $RequestData['code'] . " (" . $RequestData['description'] . ")",TYPE_TRACE);
                       $api_data = null;
                     }
+                  } else {
+                    $api_data = null;
                   }
-                } else {
-                  $api_data = null;
-                }
-                if (is_null($api_data)) {
-                  $json_data = null;
-                } else {
-                  $json_data = json_decode($api_data,true);
-                }
-                if (!is_null($json_data)) {
-                  if (!empty($api_json_structure)) {
-                    $api_data_error = null;
-                    if (isset($api_json_structure['error'])) {
-                      if (isset($json_data['error'])) { $api_data_error = $api_json_structure['error']; }
-                    }
-                    if (!is_null($api_data_error)) {
-                      if (is_array($api_data_error)) { $api_data_error = json_encode($api_data_error); }
-                      writeLog($section_prefix . "$method: API Error: '$api_data_error'",TYPE_TRACE);
-                    } else {
-                      $icon_counter = 0;
-                      if (isset($api_json_structure['icons'])) {
-                        $icon_block = $json_data['icons'];
-                      } else {
-                        $icon_block = $json_data;
+                  if (is_null($api_data)) {
+                    $json_data = null;
+                  } else {
+                    $json_data = json_decode($api_data,true);
+                  }
+                  if (!is_null($json_data)) {
+                    if (!empty($api_json_structure)) {
+                      $api_data_error = null;
+                      if (isset($api_json_structure['error'])) {
+                        if (isset($json_data['error'])) { $api_data_error = $api_json_structure['error']; }
                       }
-                      if (is_array($icon_block)) {
-                        writeLog($section_prefix . "$method: API Returned " . count($icon_block) . " records",TYPE_TRACE);
-                        foreach ($icon_block as $icon) {
-                          $icon_counter++;
-                          $api_temp = null;
-                          $api_data_link = null;
-                          $api_data_type = null;
-                          $api_data_size = null;
-                          $link_extension = null;
-                          $flag_accepted = false;
-                          $flag_size_ok = true;
-                          if (isset($api_json_structure['link'])) { if (isset($icon[$api_json_structure['link']])) { $api_data_link = $icon[$api_json_structure['link']]; } }
-                          if (!is_string($api_data_link)) { $api_data_link = null; }
-                          
-                          if (!is_null($api_data_link)) {
-                            if (isset($api_json_structure['size'])) { if (isset($icon[$api_json_structure['size']])) { $api_data_size = $icon[$api_json_structure['size']]; } }
-                            if (isset($api_json_structure['mime'])) { if (isset($icon[$api_json_structure['mime']])) { $api_data_type = $icon[$api_json_structure['mime']]; } }
-                            if (isset($api_json_structure['sizeWxH'])) { if (isset($icon[$api_json_structure['sizeWxH']])) { list($api_data_size,$api_discard) = explode("x",$icon[$api_json_structure['sizeWxH']]); } }
-                            if (!is_string($api_data_type)) { $api_data_type = null; }
-                            if (!is_numeric($api_data_size)) { $api_data_size = null; }
-                
-                            if (!is_null($api_data_type)) {
-                              if (!is_null($api_temp)) { $api_temp .= ", "; }
-                              $api_temp .= "type=$api_data_type";
-                            }
-                            if (!is_null($api_data_size)) {
-                              if (!is_null($api_temp)) { $api_temp .= ", "; }
-                              $api_temp .= "size=$api_data_size"; 
-                            }
-                            if (is_null($api_temp)) {
-                              writeLog($section_prefix . "$method: $icon_counter: $api_data_link",TYPE_TRACE);
-                            } else {
-                              writeLog($section_prefix . "$method: $icon_counter: $api_data_link ($api_temp)",TYPE_TRACE);
-                            }
-                            if (!is_null($api_data_size)) {
-                              if (($iconSize > 0) && ($api_data_size > 0)) {
-                                if ($api_data_size < $iconSize) {
-                                  $flag_size_ok = false;
-                                }
+                      if (!is_null($api_data_error)) {
+                        if (is_array($api_data_error)) { $api_data_error = json_encode($api_data_error); }
+                        writeLog($section_prefix . "$method: API Error: '$api_data_error'",TYPE_TRACE);
+                      } else {
+                        $icon_counter = 0;
+                        if (isset($api_json_structure['icons'])) {
+                          $icon_block = $json_data['icons'];
+                        } else {
+                          $icon_block = $json_data;
+                        }
+                        if (is_array($icon_block)) {
+                          writeLog($section_prefix . "$method: API Returned " . count($icon_block) . " records",TYPE_TRACE);
+                          foreach ($icon_block as $icon) {
+                            $icon_counter++;
+                            $api_temp = null;
+                            $api_data_link = null;
+                            $api_data_type = null;
+                            $api_data_size = null;
+                            $link_extension = null;
+                            $flag_accepted = false;
+                            $flag_size_ok = true;
+                            if (isset($api_json_structure['link'])) { if (isset($icon[$api_json_structure['link']])) { $api_data_link = $icon[$api_json_structure['link']]; } }
+                            if (!is_string($api_data_link)) { $api_data_link = null; }
+                            
+                            if (!is_null($api_data_link)) {
+                              if (isset($api_json_structure['size'])) { if (isset($icon[$api_json_structure['size']])) { $api_data_size = $icon[$api_json_structure['size']]; } }
+                              if (isset($api_json_structure['mime'])) { if (isset($icon[$api_json_structure['mime']])) { $api_data_type = $icon[$api_json_structure['mime']]; } }
+                              if (isset($api_json_structure['sizeWxH'])) { if (isset($icon[$api_json_structure['sizeWxH']])) { list($api_data_size,$api_discard) = explode("x",$icon[$api_json_structure['sizeWxH']]); } }
+                              if (!is_string($api_data_type)) { $api_data_type = null; }
+                              if (!is_numeric($api_data_size)) { $api_data_size = null; }
+                  
+                              if (!is_null($api_data_type)) {
+                                if (!is_null($api_temp)) { $api_temp .= ", "; }
+                                $api_temp .= "type=$api_data_type";
                               }
-                            } 
-                            if ($flag_size_ok) {
-                              if (checkIconAcceptance($api_data_link)) {
-                                $favicon = $api_data_link;
-                                $flag_accepted = true;
-                                break;
+                              if (!is_null($api_data_size)) {
+                                if (!is_null($api_temp)) { $api_temp .= ", "; }
+                                $api_temp .= "size=$api_data_size"; 
+                              }
+                              if (is_null($api_temp)) {
+                                writeLog($section_prefix . "$method: $icon_counter: $api_data_link",TYPE_TRACE);
                               } else {
-                                unset($favicon);
+                                writeLog($section_prefix . "$method: $icon_counter: $api_data_link ($api_temp)",TYPE_TRACE);
                               }
-                            } else {
-                              if ($iconSize > 0) {
-                                writeLog($section_prefix . "$method: $icon_counter: Icon is below requested size, rejected",TYPE_TRACE);
+                              if (!is_null($api_data_size)) {
+                                if (($iconSize > 0) && ($api_data_size > 0)) {
+                                  if ($api_data_size < $iconSize) {
+                                    $flag_size_ok = false;
+                                  }
+                                }
+                              } 
+                              if ($flag_size_ok) {
+                                if (checkIconAcceptance($api_data_link)) {
+                                  $favicon = $api_data_link;
+                                  $flag_accepted = true;
+                                  break;
+                                } else {
+                                  unset($favicon);
+                                }
+                              } else {
+                                if ($iconSize > 0) {
+                                  writeLog($section_prefix . "$method: $icon_counter: Icon is below requested size, rejected",TYPE_TRACE);
+                                }
                               }
                             }
                           }
+                        } else {
+                          writeLog($section_prefix . "$method: JSON API Data Block Is Not An Array",TYPE_TRACE);
                         }
-                      } else {
-                        writeLog($section_prefix . "$method: JSON API Data Block Is Not An Array",TYPE_TRACE);
+                      }
+                    } else {
+                      writeLog($section_prefix . "$method: JSON API Does Not Have Structure Defined, Attempting to Parse",TYPE_DEBUGGING);
+                      //  Attempt Simple Parsing
+                      if (is_string($json_data)) { 
+                        $favicon = $json_data;
+                      } elseif (is_array($json_data)) {
+                        if (isset($json_data[0])) {
+                          $favicon = $json_data[0];
+                        }
                       }
                     }
                   } else {
-                    writeLog($section_prefix . "$method: JSON API Does Not Have Structure Defined, Attempting to Parse",TYPE_DEBUGGING);
-                    //  Attempt Simple Parsing
-                    if (is_string($json_data)) { 
-                      $favicon = $json_data;
-                    } elseif (is_array($json_data)) {
-                      if (isset($json_data[0])) {
-                        $favicon = $json_data[0];
-                      }
+                    if (is_null($api_data)) { 
+                      writeLog($section_prefix . "$method: No JSON Data Returned",TYPE_DEBUGGING);
+                    } else {
+                      writeLog($section_prefix . "$method: Unable to Decode JSON Data",TYPE_DEBUGGING);
                     }
+                    unset($favicon);
                   }
                 } else {
-                  if (is_null($api_data)) { 
-                    writeLog($section_prefix . "$method: No JSON Data Returned",TYPE_DEBUGGING);
+                  //  Not a JSON Based API so the response should be the direct favicon URL
+                  $favicon = $api_request;
+                }
+              } else { 
+                writeLog($section_prefix . "$method: Could not create API Request",TYPE_DEBUGGING);
+                unset($favicon);
+              }
+              if (isset($favicon)) {
+                if (!is_null($favicon)) {
+                  if (!$flag_accepted) {
+                    writeLog($section_prefix . "$method: Checking Icon Acceptance for '$favicon'",TYPE_DEBUGGING);
+                    if (checkIconAcceptance($favicon)) { $flag_accepted = true; }
+                  }
+                  if ($flag_accepted) {
+                    writeLog($section_prefix . "$method: Request URL '$favicon' was successful",TYPE_DEBUGGING);  
+                    break;
                   } else {
-                    writeLog($section_prefix . "$method: Unable to Decode JSON Data",TYPE_DEBUGGING);
+                    writeLog($section_prefix . "$method: Request URL '$favicon' did not return a valid icon or it was rejected",TYPE_DEBUGGING);
+                    unset($favicon);
                   }
-                  unset($favicon);
-                }
-              } else {
-                //  Not a JSON Based API so the response should be the direct favicon URL
-                $favicon = $api_request;
-              }
-            } else { 
-              writeLog($section_prefix . "$method: Could not create API Request",TYPE_DEBUGGING);
-              unset($favicon);
-            }
-            if (isset($favicon)) {
-              if (!is_null($favicon)) {
-                if (!$flag_accepted) {
-                  writeLog($section_prefix . "$method: Checking Icon Acceptance for '$favicon'",TYPE_DEBUGGING);
-                  if (checkIconAcceptance($favicon)) { $flag_accepted = true; }
-                }
-                if ($flag_accepted) {
-                  writeLog($section_prefix . "$method: Request URL '$favicon' was successful",TYPE_DEBUGGING);  
-                  break;
                 } else {
-                  writeLog($section_prefix . "$method: Request URL '$favicon' did not return a valid icon or it was rejected",TYPE_DEBUGGING);
-                  unset($favicon);
+                  writeLog($section_prefix . "$method: Icon URL is Null",TYPE_DEBUGGING);
                 }
-              } else {
-                writeLog($section_prefix . "$method: Icon URL is Null",TYPE_DEBUGGING);
               }
+            } else {
+              writeLog($section_prefix . "$method: API Is Disabled!",TYPE_WARNING);
             }
           } else {
-            writeLog($section_prefix . "$method: API Is Disabled!",TYPE_WARNING);
+            writeLog($section_prefix . "Selected API Is Invalid!",TYPE_WARNING);
           }
-        } else {
-          writeLog($section_prefix . "Selected API Is Invalid!",TYPE_WARNING);
         }
-      }
-    } else {
-      writeLog("No APIs Available",TYPE_WARNING);
-    }
-  } // END If nothing works: Get the Favicon from API
-
-  //  Update Status
-  if (isset($favicon)) {
-    writeLog("Found Icon at '$favicon'",TYPE_DEBUGGING);
-    
-    updateProcessEntry($url,"favicon",$favicon);
-    updateProcessEntry($url,"method",$method);
-    updateProcessEntry($url,"tries",$attemptCount);
-  
-    if ($save) {
-      // should it check to see if it's resident?
-      unset($content);
-      writeLog("Loading Icon To Store using '$favicon'",TYPE_DEBUGGING);
-
-      //  Load Favicon
-      $content = load($favicon);
-      
-      if (!isset($content)) {
-        writeLog("Failed to load favicon using '$favicon'",TYPE_DEBUGGING);
       } else {
-        $content_hash = md5($content);
-        if (!is_null(getGlobal('redirect_url'))) { $favicon = getGlobal('redirect_url'); }
-        # TO DO: 
-        #   This needs to be done in the API processing section
-        if (isset($api_name)) {
-          if ($api_name == "google") {
-            if ($content_hash == GOOGLE_DEFAULT_ICON_MD5) {
-              $domain = 'default'; // so we don't save a default icon for every domain again
-              writeLog("Got Google Default Icon",TYPE_DEBUGGING);
-            }
-          }
-        }
-
-        //  Get Type
-        if (!empty($favicon)) {
-          $fileData = getIconExtension($favicon);
-          if (!$fileData['valid']) {
-            writeLog("Icon Is Not Valid, Discarding '$favicon'",TYPE_DEBUGGING);
-          } else {
-            $fileExtension = $fileData['extension'];
-            $fileContentType = $fileData['content_type'];
-            $fileMethod = $fileData['method'];
-            updateProcessEntry($url,"icontype",$fileContentType);
-            updateProcessEntry($url,"hash",$content_hash);
-            
-            writeLog("Icon Is Valid ('$favicon'), ext=$fileExtension, type=$fileContentType, id_method=$fileMethod, method=$method",TYPE_DEBUGGING);
-
-            if ($removeTLD && !is_null($core_domain)) {
-              $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$core_domain.'.'.$fileExtension);
-            } else {
-              $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.'.$fileExtension);
-            }
-            updateProcessEntry($url,"local",$filePath);
-
-            //  If overwrite, delete it
-            if (file_exists($filePath)) {
-              if ($overwrite) {
-                updateProcessEntry($url,"overwrite",true);
-                unlink($filePath);
-              }
-            }
-
-            //  If file exists, skip
-            if (file_exists($filePath)) {
-              updateProcessEntry($url,"saved",false);
-              writeLog("Skipping Storing Icon as '$filePath'",TYPE_DEBUGGING);
-            } else {
-              // Write
-              $fh = @fopen($filePath, 'wb');
-              if ($fh) {
-                fwrite($fh, $content);
-                fclose($fh);
-                writeLog("Stored Icon as '$filePath'",TYPE_DEBUGGING);
-                updateProcessEntry($url,"saved",true);
-              } else {
-                writeLog("Error Storing Icon as '$filePath'",TYPE_DEBUGGING);
-              }
-            }
-          }
-        }
+        writeLog("No APIs Available",TYPE_WARNING);
       }
+    } // END If nothing works: Get the Favicon from API
+
+    //  Update Status
+    if (isset($favicon)) {
+      writeLog("Found Icon at '$favicon'",TYPE_DEBUGGING);
+      
+      updateProcessEntry($url,"favicon",$favicon);
+      updateProcessEntry($url,"method",$method);
+      updateProcessEntry($url,"tries",$attemptCount);
+    
+      if ($save) {
+        // should it check to see if it's resident?
+        unset($content);
+        writeLog("Loading Icon To Store using '$favicon'",TYPE_DEBUGGING);
+
+        //  Load Favicon
+        $content = load($favicon);
+        
+        if (!isset($content)) {
+          writeLog("Failed to load favicon using '$favicon'",TYPE_DEBUGGING);
+        } else {
+          $content_hash = md5($content);
+          if (!is_null(getGlobal('redirect_url'))) { $favicon = getGlobal('redirect_url'); }
+          # TO DO: 
+          #   This needs to be done in the API processing section
+          if (isset($api_name)) {
+            if ($api_name == "google") {
+              if ($content_hash == GOOGLE_DEFAULT_ICON_MD5) {
+                $domain = 'default'; // so we don't save a default icon for every domain again
+                writeLog("Got Google Default Icon",TYPE_DEBUGGING);
+              }
+            }
+          }
+
+          //  Get Type
+          if (!empty($favicon)) {
+            $fileData = getIconExtension($favicon);
+            if (!$fileData['valid']) {
+              writeLog("Icon Is Not Valid, Discarding '$favicon'",TYPE_DEBUGGING);
+            } else {
+              $fileExtension = $fileData['extension'];
+              $fileContentType = $fileData['content_type'];
+              $fileMethod = $fileData['method'];
+              updateProcessEntry($url,"icontype",$fileContentType);
+              updateProcessEntry($url,"hash",$content_hash);
+              
+              writeLog("Icon Is Valid ('$favicon'), ext=$fileExtension, type=$fileContentType, id_method=$fileMethod, method=$method",TYPE_DEBUGGING);
+
+              if ($removeTLD && !is_null($core_domain)) {
+                $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$core_domain.'.'.$fileExtension);
+              } else {
+                $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$domain.'.'.$fileExtension);
+              }
+              updateProcessEntry($url,"local",$filePath);
+
+              //  If overwrite, delete it
+              if (file_exists($filePath)) {
+                if ($overwrite) {
+                  updateProcessEntry($url,"overwrite",true);
+                  unlink($filePath);
+                }
+              }
+
+              //  If file exists, skip
+              if (file_exists($filePath)) {
+                updateProcessEntry($url,"saved",false);
+                writeLog("Skipping Storing Icon as '$filePath'",TYPE_DEBUGGING);
+              } else {
+                // Write
+                $fh = @fopen($filePath, 'wb');
+                if ($fh) {
+                  fwrite($fh, $content);
+                  fclose($fh);
+                  writeLog("Stored Icon as '$filePath'",TYPE_DEBUGGING);
+                  updateProcessEntry($url,"saved",true);
+                } else {
+                  writeLog("Error Storing Icon as '$filePath'",TYPE_DEBUGGING);
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // Don't save Favicon local, only return Favicon URL
+        $filePath = $favicon;
+      }
+
+      // FOR DEBUG ONLY
+      if (debugMode()) { listIcons($filePath); }    
     } else {
-      // Don't save Favicon local, only return Favicon URL
-      $filePath = $favicon;
+      writeLog("Did not find icon for '$url'",TYPE_DEBUGGING);
     }
 
-    // FOR DEBUG ONLY
-    if (debugMode()) { listIcons($filePath); }    
+    // reset script runtime timeout
+    if (!$consoleMode) { set_time_limit($max_execution_time); }
+
+    //  Update Elapsed Time
+    updateProcessEntry($url,"elapsed",stopTimer($instanceName,true));
   } else {
-    writeLog("Did not find icon for '$url'",TYPE_DEBUGGING);
+    writeLog("Skipping Processing For: '$url'",TYPE_DEBUGGING);
   }
 
-  // reset script runtime timeout
-  if (!$consoleMode) { set_time_limit($max_execution_time); }
-
-  //  Update Elapsed Time
-  updateProcessEntry($url,"elapsed",stopTimer($instanceName,true));
-  
   //  End Section
   debugSection();
   
@@ -1294,7 +1277,6 @@ function load($url) {
     $redirect = getGlobal('redirect_count');
     if (!isset($redirect)) { $redirect = 0; }
     $flag_skip_loadlastresult = false;
-    
     //  If no protocol is it's probably a local file.
     if (is_null($protocol)) {
       $content = loadLocalFile($url);
@@ -1313,7 +1295,6 @@ function load($url) {
         }
       }
     }
-    
     if (is_null($content)) {
       writeLog("loading: url='$url'",TYPE_TRACE);
       if (getConfiguration("curl","enabled")) {
@@ -1329,13 +1310,16 @@ function load($url) {
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         if (getConfiguration("curl","showprogress")) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
+        $protocol = null;
+        $protocol_id = null;
         $content = curl_exec($ch);
         $curl_response = curl_getinfo($ch);
         $content_type = $curl_response['content_type'];
         $http_code = $curl_response['http_code'];
         $curl_url = $curl_response['url'];
-        $protocol = $curl_response['scheme'];
-        $protocol_id = $curl_response['protocol'];
+        if (isset($curl_response['scheme'])) { $protocol = $curl_response['scheme']; }
+        if (isset($curl_response['protocol'])) { $protocol_id = $curl_response['protocol']; }
+        if (is_null($protocol)) { $protocol = parse_url($url,PHP_URL_SCHEME); }
         writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE);
         curl_close($ch);
         unset($ch);
@@ -1387,7 +1371,8 @@ function load($url) {
                 $http_code = end($matches[1]);
               }
             }
-            if (is_null($http_code)) { writeLog("$method: Return Code=NONE for '$url'",TYPE_TRACE); } else { writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE); }
+            $RequestData = lookupHTTPResponse($http_code);
+            writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
           }
         }
       }
@@ -1587,119 +1572,148 @@ function getIconExtension($url, $noFallback = false) {
   $method = null;
   $http_code = null;
   $is_valid = false;
-  if (!empty($url)) {
-    $content = load($url);
-    if (isLastLoadResultValid()) {
-      $http_code = getLastLoadResult("http_code");
-      if (is_null($http_code)) {
-        writeLog("url='$url', last load result did not record a response code",TYPE_TRACE);
-        $content_type = getLastLoadResult("content_type");
-      } else {
-        if ($http_code >= 400) {
-          $content = null;
-          $noFallback = true;
-          $is_valid = false;
-          writeLog("url='$url', last load result returned error=$http_code",TYPE_TRACE);
-        } else {
-          $content_type = getLastLoadResult("content_type");
-        }
-      }
-    } else {
-      writeLog("url='$url', last load result was invalid",TYPE_TRACE);
-    }
-    if (!is_null($content)) {
-      if (is_null($content_type)) {
-        if (getCapability("php","exif")) {
-          $phpUA = ini_get("user_agent");
-          $timeout = ini_get("default_socket_timeout");
-          $method = "exif";
-          writeLog("url='$url', method=$exif, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
-          $filetype = @exif_imagetype($url);
-          if (!is_null($filetype)) {
-            switch ($filetype) {
-              case IMAGETYPE_GIF:
-                $content_type = "image/gif";
-                break;
-              case IMAGETYPE_JPEG:
-                $content_type = "image/jpeg";
-                break;
-              case IMAGETYPE_PNG:
-                $content_type = "image/png";
-                break;
-              case IMAGETYPE_ICO:
-                $content_type = "image/x-icon";
-                break;
-              case IMAGETYPE_WEBP:
-                $content_type = "image/webp";
-                break;
-              case IMAGETYPE_BMP:
-                $content_type = "image/bmp";
-                break;
-              default:
-                $content_type = null;
-                $file_extension = null;
+  $reason = "not set";
+  if (!is_null($url)) {
+    if (is_string($url)) {
+      if (!empty($url)) {
+        $content = load($url);
+        if (isLastLoadResultValid()) {
+          $http_code = getLastLoadResult("http_code");
+          $RequestData = lookupHTTPResponse($http_code);
+          if ($RequestData['ok']) {
+            $content_type = getLastLoadResult("content_type");
+          } else {
+            writeLog("url='$url', last load result returned an error=" . $RequestData['code'] . " (" . $RequestData['description'] . ")",TYPE_TRACE);
+            if (is_null($http_code)) {
+              $content_type = getLastLoadResult("content_type");
+              if (is_null($content_type)) {
+                $reason = "no http code or content_type returned from server";
+              } else {
+                $reason = "no http code returned from server";
+              }
+            } else {
+              $content = null;
+              $noFallback = true;
+              $is_valid = false;
+              $reason = "server response was " . $RequestData['code'] . " " . $RequestData['description'];
             }
-            if (!is_null($content_type)) {  $file_extension = lookupExtensionByMIME($content_type); }
+          }
+        } else {
+          writeLog("url='$url', last load result was invalid",TYPE_TRACE);
+          $reason = "failed to load url";
+        }
+        if (!is_null($content)) {
+          if (is_null($content_type)) {
+            if (getCapability("php","exif")) {
+              $phpUA = ini_get("user_agent");
+              $timeout = ini_get("default_socket_timeout");
+              $method = "exif";
+              writeLog("url='$url', method=$exif, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+              $filetype = @exif_imagetype($url);
+              if (!is_null($filetype)) {
+                switch ($filetype) {
+                  case IMAGETYPE_GIF:
+                    $content_type = "image/gif";
+                    break;
+                  case IMAGETYPE_JPEG:
+                    $content_type = "image/jpeg";
+                    break;
+                  case IMAGETYPE_PNG:
+                    $content_type = "image/png";
+                    break;
+                  case IMAGETYPE_ICO:
+                    $content_type = "image/x-icon";
+                    break;
+                  case IMAGETYPE_WEBP:
+                    $content_type = "image/webp";
+                    break;
+                  case IMAGETYPE_BMP:
+                    $content_type = "image/bmp";
+                    break;
+                  default:
+                    $content_type = null;
+                    $file_extension = null;
+                }
+                if (!is_null($content_type)) {  $file_extension = lookupExtensionByMIME($content_type); }
+              }
+            }
+          } else {
+            $method = "mimetype";
+            writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+            switch ($content_type) {
+              case "text/html":
+                $noFallback = true;
+                $file_extension = null;
+                $is_valid = false;
+                $reason = "not an image";
+                break;
+              case "application/octet-stream":
+                if (!getConfiguration("global","allow_octet_stream")) {
+                  $noFallback = true;
+                  $file_extension = null;
+                  $is_valid = false;
+                  $reason = "generic binary data";
+                }
+              default:
+                $file_extension = lookupExtensionByMIME($content_type);
+                if (is_null($file_extension)) {
+                  $is_valid = false;
+                  $reason = "lookupExtensionByMIME returned null";
+                } else {
+                  $is_valid = true;
+                }
+            }
+          }
+        }
+        if (is_null($file_extension)) {
+          if (!$noFallback) {
+            $method = "datacheck";
+            writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
+            # TO DO:
+            #   data is in $content
+            #   check for format markers
+          }
+        }
+        if (is_null($file_extension)) {
+          if (!$noFallback) {
+            $method = "extension";
+            writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
+            $extension = @preg_replace('/^.*\.([^.]+)$/D', '$1', $url);
+            if (isValidType($extension)) {
+              $file_extension = $extension;
+            }
+          }
+        }
+        $was_valid = $is_valid;
+        if (!is_null($file_extension)) {
+          $is_valid = isValidType($file_extension);
+          if ($was_valid & !$is_valid) { $reason = "isValidType vetoed file"; }
+        }
+        if (is_null($content_type)) {
+          if (!is_null($file_extension)) {
+            $content_type = guessContentType($file_extension);
+            $reason = "content type is a guess";
           }
         }
       } else {
-        $method = "mimetype";
-        writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
-        switch ($content_type) {
-          case "text/html":
-            $noFallback = true;
-            $file_extension = null;
-            $is_valid = false;
-            break;
-          case "application/octet-stream":
-            if (!getConfiguration("global","allow_octet_stream")) {
-              $noFallback = true;
-              $file_extension = null;
-              $is_valid = false;
-            }
-          default:
-            $file_extension = lookupExtensionByMIME($content_type);
-            if (is_null($file_extension)) {
-              $is_valid = false;
-            } else {
-              $is_valid = true;
-            }
-        }
+        writeLog("URL given is empty",TYPE_TRACE);
+        $reason = "URL was empty";
       }
+    } else {
+      writeLog("URL given is not a string",TYPE_TRACE);
+      $reason = "URL was not a string";
     }
-    if (is_null($file_extension)) {
-      if (!$noFallback) {
-        $method = "datacheck";
-        writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
-        # TO DO:
-        #   data is in $content
-        #   check for format markers
-      }
-    }
-    if (is_null($file_extension)) {
-      if (!$noFallback) {
-        $method = "extension";
-        writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
-        $extension = @preg_replace('/^.*\.([^.]+)$/D', '$1', $url);
-        if (isValidType($extension)) {
-          $file_extension = $extension;
-        }
-      }
-    }
-    if (!is_null($file_extension)) {
-      $is_valid = isValidType($file_extension);
-    }
-    if (is_null($content_type)) {
-      if (!is_null($file_extension)) {
-        $content_type = guessContentType($file_extension);
-      }
-    }
+  } else {
+    writeLog("URL is null",TYPE_TRACE);
+    $reason = "URL was null";
   }
+  if ($is_valid) { $reason = "accepted"; }
   $retval = array();
   $retval['valid'] = $is_valid;
   $retval['extension'] = $file_extension;
   $retval['content_type'] = $content_type;
   $retval['method'] = $method;
+  $retval['reason'] = $reason;
   debugSection();
   return $retval;
 }
@@ -1731,6 +1745,111 @@ function getValidTypes() {
       $retval .= $validExtension;
     }
   }
+  return $retval;
+}
+
+/*  Lookup HTTP Code */
+/*  Some of these are unofficial but get-fav may run into them */
+function lookupHTTPResponse($code = null) {
+  $status_ok = false;
+  $description = null;
+  $http_code = "(null)";
+  if (!is_null($code)) {
+    if (is_numeric($code)) {
+      if ($code >= RANGE_HTTP_RESPONSE_MINIMUM && $code <= RANGE_HTTP_RESPONSE_MAXIMUM) {
+        $http_code = $code;
+        if ($code >= 100 && $code < 400) {
+          $status_ok = true;
+        }
+        switch ($code) {
+          case 100: $description = "Continue"; break;
+          case 101: $description = "Switching Protocols"; break;
+          case 102: $description = "Processing (WebDAV)"; break;
+          case 103: $description = "Early Hints"; break;
+          case 200: $description = "OK"; break;
+          case 201: $description = "Created"; break;
+          case 202: $description = "Accepted"; break;
+          case 203: $description = "Non-Authoritative Information"; break;
+          case 204: $description = "No Content"; break;
+          case 205: $description = "Reset Content"; break;
+          case 206: $description = "Partial Content"; break;
+          case 207: $description = "Multi-Status (WebDAV)"; break;
+          case 208: $description = "Already Reported (WebDAV)"; break;
+          case 226: $description = "IM Used (HTTP Delta encoding)"; break;
+          case 300: $description = "Multiple Choices"; break;
+          case 301: $description = "Moved Permanently"; break;
+          case 302: $description = "Found"; break;
+          case 303: $description = "See Other"; break;
+          case 304: $description = "Not Modified"; break;
+          case 305: $description = "Use Proxy"; break;
+          case 306: $description = "Switch Proxy"; break;
+          case 307: $description = "Temporary Redirect"; break;
+          case 308: $description = "Permanent Redirect"; break;
+          case 400: $description = "Bad Request"; break;
+          case 401: $description = "Unauthorized"; break;
+          case 402: $description = "Payment Required"; break;
+          case 403: $description = "Forbidden"; break;
+          case 404: $description = "Not Found"; break;
+          case 405: $description = "Method Not Allowed"; break;
+          case 406: $description = "Not Acceptable"; break;
+          case 407: $description = "Proxy Authentication Required"; break;
+          case 408: $description = "Request Time-out"; break;
+          case 409: $description = "Conflict"; break;
+          case 410: $description = "Gone"; break;
+          case 411: $description = "Length Required"; break;
+          case 412: $description = "Precondition Failed"; break;
+          case 413: $description = "Payload Too Large"; break;
+          case 414: $description = "URI Too Long"; break;
+          case 415: $description = "Unsupported Media Type"; break;
+          case 416: $description = "Range Not Satisfiable"; break;
+          case 417: $description = "Expectation Failed"; break;
+          case 418: $description = "I'm a teapot"; break;
+          case 421: $description = "Misdirected Request"; break;
+          case 422: $description = "Unprocessable Content (WebDAV)"; break;
+          case 423: $description = "Locked (WebDAV)"; break;
+          case 424: $description = "Failed Dependency (WebDAV)"; break;
+          case 425: $description = "Too Early"; break;
+          case 426: $description = "Upgrade Required"; break;
+          case 428: $description = "Precondition Required"; break;
+          case 429: $description = "Too Many Requests"; break;
+          case 431: $description = "Request Header Fields Too Large"; break;
+          case 444: $description = "No Response"; break;
+          case 451: $description = "Unavailable For Legal Reasons"; break;
+          case 500: $description = "Internal Server Error"; break;
+          case 501: $description = "Not Implemented"; break;
+          case 502: $description = "Bad Gateway"; break;
+          case 503: $description = "Service Unavailable"; break;
+          case 504: $description = "Gateway Timeout"; break;
+          case 505: $description = "HTTP Version Not Supported"; break;
+          case 506: $description = "Variant Also Negotiates"; break;
+          case 507: $description = "Insufficient Storage (WebDAV)"; break;
+          case 508: $description = "Loop Detected (WebDAV)"; break;
+          case 509: $description = "Bandwidth Limit Exceeded"; break;
+          case 510: $description = "Not Extended"; break;
+          case 511: $description = "Network Authentication Required"; break;
+          case 521: $description = "Web Server Is Down"; break;
+          case 522: $description = "Connection Timed Out"; break;
+          case 523: $description = "Origin Is Unreachable"; break;
+          default:
+            $description = "Unknown";
+        }
+      } else {
+        $description = "Invalid Response; Out of Range ($code)";
+        $http_code = "(out of range)";
+      }
+    } else {
+      $description = "Response Not Numeric";
+      $http_code = "(invalid)";
+    }
+  } else {
+    $description = "Response Is Null";
+    $http_code = "(null)";
+  }
+  $retval = array(
+    "ok" => $status_ok,
+    "description" => $description,
+    "code" => $http_code,
+  );
   return $retval;
 }
 
@@ -1775,7 +1894,7 @@ function checkIconAcceptance($url = null) {
           }
         }
       } else {
-        writeLog("getIconExtension rejected the icon",TYPE_TRACE);
+        writeLog("getIconExtension rejected the icon (reason: " . $fileData['reason'] . ")",TYPE_TRACE);
       }
     } else {
       writeLog("URL is not a string",TYPE_TRACE);
@@ -2781,6 +2900,22 @@ function deleteStatistic($name) {
 
 /*
 **  Processed Controller
+**  
+**  Structure:
+**    url         key field (string)
+**    favicon     url for the favicon (string)
+**    icontype    mime content-type (string)
+**    method      method used to get favicon (string)
+**    local       local pathname (string)
+**    hash        md5hash of the icon
+**    tries       number of attempts made (numeric)
+**    overwrite   was overwrite used? (boolean)
+**    saved       was icon saved locally? (boolean)
+**    elapsed     elapsed time to get icon (float)
+**    state       current status (numeric lookup)
+**    updated     was an updated icon found? (boolean)
+**    accepted    icon has met requirements (if state is STATE_FOUND)
+
 */
 function isValidProcessElement($element) {
   $retval = false;
@@ -2807,23 +2942,32 @@ function isValidProcessElement($element) {
 
 function addProcessEntry($url) {
   global $processed;
-  $entry = getEmptyProcessEntry();
-  $entry['url'] = normalizeKey($url);
-  # TO DO:
-  #   check to see if it already exists
-  array_push($processed,$entry);
+  $retval = false;
+  if (is_string($url)) {
+    $entry = getProcessEntry('url',normalizeKey($url));
+    if (!isset($entry['url'])) {
+      if (is_null($entry['url'])) {
+        $entry['url'] = normalizeKey($url);
+        array_push($processed,$entry);
+        $retval = true;
+      }
+    }
+  }
+  return $retval;
 }
 
 function updateProcessEntry($url,$element,$value = null) {
   global $processed;
   $retval = false;
-  $entry = getProcessEntry('url',normalizeKey($url));
-  if (isset($entry['url'])) {
-    $element = normalizeKey($element);
-    if (isValidProcessElement($element)) {
-      $entry[$element] = $value;
-      if (updateProcessRecord($entry)) {
-        $retval = true;
+  if (is_string($url)) {
+    $entry = getProcessEntry('url',normalizeKey($url));
+    if (isset($entry['url'])) {
+      $element = normalizeKey($element);
+      if (isValidProcessElement($element)) {
+        $entry[$element] = $value;
+        if (updateProcessRecord($entry)) {
+          $retval = true;
+        }
       }
     }
   }
@@ -2833,11 +2977,13 @@ function updateProcessEntry($url,$element,$value = null) {
 function updateProcessRecord($entry) {
   global $processed;
   $retval = false;
-  if (isset($entry['url'])) {
-    $found_key = array_search($entry['url'], array_column($processed, 'url'));
-    if ($found_key !== false) {
-      $processed[$found_key] = $entry;
-      $retval = true;
+  if (is_array($entry)) {
+    if (isset($entry['url'])) {
+      $found_key = array_search($entry['url'], array_column($processed, 'url'));
+      if ($found_key !== false) {
+        $processed[$found_key] = $entry;
+        $retval = true;
+      }
     }
   }
   return $retval;
@@ -2862,38 +3008,18 @@ function getEmptyProcessEntry() {
   return $return_object;
 }
 
-function isIconWanted($url) {
-  $retval = false;
-  $object = getProcessEntry($url);
-  if (!empty($object)) {
-    if (isset($object['state'])) { if ($object['state'] == STATE_WANTED) { $retval = true; } }
-  }
-  return $retval;
-}
-
-function isIconAccepted($url) {
-  $retval = false;
-  $object = getProcessEntry($url);
-  if (!empty($object)) {
-    if ((isset($object['state'])) && (isset($object['accepted']))) {
-      if (($object['state'] == STATE_FOUND) && ($object['accepted'])) {
-        $retval = true;
-      }
-    }
-  }
-  return $retval;
-}
-
 function getProcessEntry($element,$value) {
   global $processed;
   $return_object = getEmptyProcessEntry();
-  $element = normalizeKey($element);
-  foreach ($processed as $item) {
-    if (!is_null($item['url'])) {
-      if (isset($item[$element])) {
-        if (strcasecmp($item[$element], $value) == 0) {
-          $return_object = $item;
-          break;
+  if (is_string($element)) {
+    $element = normalizeKey($element);
+    foreach ($processed as $item) {
+      if (!is_null($item['url'])) {
+        if (isset($item[$element])) {
+          if (strcasecmp($item[$element], $value) == 0) {
+            $return_object = $item;
+            break;
+          }
         }
       }
     }
@@ -2901,6 +3027,32 @@ function getProcessEntry($element,$value) {
   return $return_object;
 }
 
+/*  Shortcut Functions  */
+function isIconWanted($url) {
+  $retval = false;
+  if (is_string($url)) {
+    $object = getProcessEntry("url",$url);
+    if (!empty($object)) {
+      if (isset($object['state'])) { if ($object['state'] == STATE_WANTED) { $retval = true; } }
+    }
+  }
+  return $retval;
+}
+
+function isIconAccepted($url) {
+  $retval = false;
+  if (is_string($url)) {
+    $object = getProcessEntry("url",$url);
+    if (!empty($object)) {
+      if ((isset($object['state'])) && (isset($object['accepted']))) {
+        if (($object['state'] == STATE_FOUND) && ($object['accepted'])) {
+          $retval = true;
+        }
+      }
+    }
+  }
+  return $retval;
+}
 /*
 **  Last Load Result Controller
 */
@@ -2918,6 +3070,9 @@ function isValidLastLoadElement($element) {
       if ($element == "content") { $retval = true; }
       if ($element == "hash") { $retval = true; }
       if ($element == "valid") { $retval = true; }
+      if ($element == "error") { $retval = true; }
+      if ($element == "response") { $retval = true; }
+      if ($element == "response_code") { $retval = true; }
     }
   }
   return $retval;
@@ -2938,6 +3093,9 @@ function lastLoadResult($url = null,$method = null,$content_type = null,$http_co
   global $lastLoad;
   $retval = false;
   if (!is_null($url)) { $retval = true; }
+  $RequestResponse = lookupHTTPResponse($http_code);
+  $is_error = true;
+  if ($RequestResponse['ok']) { $is_error = false; }
   $lastLoad = array(
     "url" => $url,
     "method" => $method,
@@ -2948,6 +3106,9 @@ function lastLoadResult($url = null,$method = null,$content_type = null,$http_co
     "content" => $content,
     "hash" =>  md5($content),
     "valid" => setBoolean($retval),
+    "error" => $is_error,
+    "response" => $RequestResponse['description'],
+    "response_code" => $RequestResponse['code'],
   );
   return $retval;
 }
@@ -2968,6 +3129,9 @@ function getEmptyLastLoadResult() {
     "content" => null,
     "hash" =>  null,
     "valid" => false,  
+    "error" => true,  
+    "response" => "EMPTY_RECORD",
+    "response_code" => "(null)",
   );
   return $entry;
 }
