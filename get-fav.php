@@ -1,11 +1,32 @@
 <?php
 /*
 
+reading the API .ini should be a settable define
+the new api json structure needs to be added to the default api list
+should have a define to try to read get-fav.ini in current folder (overridden with --config obviously)
+should be able to specify a API path like config (or reference it in the config file)
+should probably add iconhorse to the default list
+
+this should be used with the exif path:
+  image_type_to_mime_type
+  
+  $content_type = image_type_to_mime_type(exif image type)
+  
+file info stuff:
+  
+
+  FILEINFO_EXTENSION (PHP 7.2.0+)
+
+# getimagesize should only be done with a *valid image*
+# list($width, $height, $type, $attr) = getimagesize("img/flag.jpg");  
+
+    
 -----------------------------
 CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Capability checking is more thorough and accurate.  ("exif" requires "mbstring" etc)
   (In Progress) Preparing to make alerations to program flow, see CHANGES section below.
   Added HTTP Code parser (lookupHTTPResponse), returns an array:
       ok (boolean)
@@ -201,7 +222,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202306021445');
+define('PROGRAM_VERSION', '202306032153');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -323,13 +344,16 @@ $timers = array();
 $flag_log_initialized = 0;
 $log_handle = null;
 
+
 /* Start Initializing */
 startTimer("program");
 setItem("project_name",PROJECT_NAME);
 setItem("program_name",PROGRAM_NAME);
 setItem("program_version",PROGRAM_VERSION);
 setItem("banner",getItem("project_name") . " (" .getItem("program_name") . ") v" . getItem("program_version"));
-    
+
+determineCapabilities();
+
 if (file_exists(DEFAULT_API_DATABASE)) {
   $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
   setConfiguration("global","api_list",DEFAULT_API_DATABASE);
@@ -349,20 +373,6 @@ if (empty($apiList)) {
 
 $display_name_API_list = getAPIList(true);
 $display_API_list = getAPIList();
-
-/*
-**  Determine Capabilities of PHP installation
-**  addCapability($scope,$capability,$value)
-*/
-
-addCapability("php","console",(php_sapi_name() == "cli"));
-addCapability("php","curl",function_exists('curl_version'));
-addCapability("php","exif",function_exists('exif_imagetype'));
-addCapability("php","get",function_exists('file_get_contents'));
-addCapability("php","put",function_exists('file_put_contents'));
-addCapability("php","fileinfo",function_exists('finfo_open'));
-addCapability("php","mimetype",function_exists('mime_content_type'));
-addCapability("php","hrtime",function_exists('hrtime'));
 
 /*  
 ** Set Configuration Defaults
@@ -3454,6 +3464,39 @@ function debugDumpStructures() {
   }
 }
 
+/*
+**  Determine Capabilities of PHP installation
+**  addCapability($scope,$capability,$value)
+*/
+function determineCapabilities() {
+  $flag_console = false;
+  $flag_curl = false;
+  $flag_exif = false;
+  $flag_get_contents = false;
+  $flag_put_contents = false;
+  $flag_fileinfo = false;
+  $flag_mimetype = false;
+  $flag_hrtime = false;
+  
+  if (php_sapi_name() == "cli") { $flag_console = true; }
+  if (extension_loaded("curl")) { if (function_exists('curl_version')) { $flag_curl = true; } }
+  if (function_exists('file_get_contents')) { $flag_get_contents = true; }
+  if (function_exists('file_put_contents')) { $flag_put_contents = true; }
+  if (function_exists('mime_content_type')) { $flag_mimetype = true; }
+  if (function_exists('hrtime')) { $flag_hrtime = true; }
+  if (extension_loaded("fileinfo")) { if (function_exists('finfo_open')) { $flag_fileinfo = true; } }
+  if ((extension_loaded("exif")) && (extension_loaded("mbstring"))) { if (function_exists('exif_imagetype')) { $flag_exif = true; } }
+      
+  addCapability("php","console",$flag_console);
+  addCapability("php","curl",$flag_curl);
+  addCapability("php","exif",$flag_exif);
+  addCapability("php","get",$flag_get_contents);
+  addCapability("php","put",$flag_put_contents);
+  addCapability("php","fileinfo",$flag_fileinfo);
+  addCapability("php","mimetype",$flag_mimetype);
+  addCapability("php","hrtime",$flag_hrtime);
+}
+ 
 /*  Validate Configuration */
 function validateConfiguration() {
   debugSection("validateConfiguration");
