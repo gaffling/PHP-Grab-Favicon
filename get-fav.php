@@ -18,7 +18,8 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
-  Loading of 'same folder' API and config file can be controlled in the special runtime defines section.
+  Added --apiconfigfile=PATHNAME to load API Definitions
+  Loading of 'same folder' API and config file can be controlled in the special runtime defines section.  Default is OFF
     They can still be overridden by a command switch
   API: Updated favicongrabber's built-in definition
   API: Added iconforce to built-in definition
@@ -84,7 +85,6 @@ TO DO:
       Data paths:
         exif, gd, imagemagick, gmagick and a fallback
   Add option to show running configuration and exit
-  Add option to load API ini from a pathname
   Add option to actually check icon on disk's size/type? (post save)
   Change: RegEx search should have simliar path to the new json parser as there can be multiple formats/icons defined
   Add --silent (console mode only)
@@ -222,18 +222,23 @@ $time_start = microtime(true);
 **  form submission on a webserver, change the setting below to true.
 */
 define('ENABLE_WEB_INPUT', false);
-define('ENABLE_SAME_FOLDER_API_INI',true);
-define('ENABLE_SAME_FOLDER_INI',true);
+/*
+**
+**  If these are true:
+**      If get-fav-api.ini is in the same folder it will be used for API configuration automatically
+**      If get-fav.ini is in the same folder it will be used as the config automatically
+**
+*/
+define('ENABLE_SAME_FOLDER_API_INI',false);
+define('ENABLE_SAME_FOLDER_INI',false);
 
 /*
 **  Project
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202306042131');
+define('PROGRAM_VERSION', '202306042323');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
-
-
 
 /*  Debug */
 define('DEFAULT_DEBUG_DUMP_FILE', "get-fav-debug.log");
@@ -394,13 +399,7 @@ if (ENABLE_SAME_FOLDER_INI) {
 **  addAPI($name,$url,$json,$enabled,$json_structure(),$display)
 */
 
-if (empty($apiList)) {
-  addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/<SIZE>",false,DEFAULT_ENABLE_APIS);
-  addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons" => "icons","link" => "src","sizeWxH" => "sizes","mime" => "type","error" => "error"));
-  addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
-  addAPI("iconhorse","https://icon.horse/icon/<DOMAIN>",false,DEFAULT_ENABLE_APIS);
-  setConfiguration("global","api_list","internal");
-}
+if (empty($apiList)) { loadDefaultAPIs(); }
 
 $display_name_API_list = getAPIList(true);
 $display_API_list = getAPIList();
@@ -489,6 +488,8 @@ $longopts  = array(
   "loglevel::",
   "level::",
   "size::",
+  "apiconfig::",
+  "apiconfigfile::",
   "tryhomepage",
   "onlyuseapis",
   "disableallapis",
@@ -544,6 +545,7 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   echo "Lists can be separated with space, comma or semi-colon.\n";
   echo "\n";
   echo "--configfile=FILE           Pathname to read for configuration.\n";
+  echo "--apiconfigfile=FILE        Pathname to read for APIs.\n";
   echo "--list=FILE/LIST            Pathname or a delimited list of URLs to check.\n";
   echo "--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.\n";
   echo "--validtypes=FILE/LIST      Valid icon types (default is " . DEFAULT_VALID_EXTENSIONS . ")\n";
@@ -601,6 +603,7 @@ if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?'])
   exit;
 }
 
+
 /* 
 **  Command Line Options
 **  Aliased Options
@@ -611,10 +614,12 @@ if (isset($options['p'])) { $options['path'] = $options['p']; }
 if (isset($options['l'])) { $options['list'] = $options['l']; }
 if (isset($options['b'])) { $options['blocklist'] = $options['b']; }
 if (isset($options['config'])) { $options['configfile'] = $options['config']; }
+if (isset($options['apiconfig'])) { $options['apiconfigfile'] = $options['apiconfig']; }
 if (isset($options['c'])) { $options['configfile'] = $options['c']; }
 if (isset($options['save'])) { $options['store'] = $options['save']; } 
 if (isset($options['nosave'])) { $options['nostore'] = $options['nosave']; } 
 if (isset($options['skip'])) { $options['nooverwrite'] = $options['skip']; } 
+
 
 /*
 **  Load Configuration File
@@ -633,6 +638,24 @@ if (isset($options['configfile'])) {
   }
 }
 
+/*
+**  Load API Config
+*/
+if (isset($options['apiconfigfile'])) {
+  if (!is_null($options['apiconfigfile'])) {
+    if (file_exists($options['apiconfigfile'])) {
+      $apiList = parse_ini_file($options['apiconfigfile'],true,INI_SCANNER_TYPED);
+      if (empty($apiList)) {
+        loadDefaultAPIs();
+      } else {
+        setConfiguration("global","api_list",$options['apiconfigfile']);
+      }
+      $display_name_API_list = getAPIList(true);
+      $display_API_list = getAPIList();
+    }
+  }
+}
+      
 /*
 **   Process Command Line Switches
 */
@@ -675,14 +698,7 @@ writeLog("PHP Version: " . phpversion(),TYPE_VERBOSE);
 if (debugMode()) {
   writeLog("Running Debug Mode",TYPE_VERBOSE);
   writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
-  writeLog("Capabilities:",TYPE_VERBOSE);
-  writeLog("* Extension EXIF Enabled: " . showBoolean(getCapability("php","exif")),TYPE_VERBOSE);
-  writeLog("* Extension FileInfo Enabled: " . showBoolean(getCapability("php","fileinfo")),TYPE_VERBOSE);
-  writeLog("* Extension cURL Enabled: " . showBoolean(getCapability("php","curl")),TYPE_VERBOSE);
-  writeLog("* Function file_get_contents Available: " . showBoolean(getCapability("php","get")),TYPE_VERBOSE);
-  writeLog("* Function file_put_contents Available: " . showBoolean(getCapability("php","put")),TYPE_VERBOSE);
-  writeLog("* Function hrtime Available: " . showBoolean(getCapability("php","hrtime")),TYPE_VERBOSE);
-  writeLog("* Function mime_content_type Available: " . showBoolean(getCapability("php","mimetype")),TYPE_VERBOSE);
+  showCapabilities(TYPE_VERBOSE);
 }
 
 /*  Warn If Capabilities Are Too Weak */
@@ -761,7 +777,7 @@ initializePHPAgent();
 
 /*  Show Configuration Options */
 writeLog("All Lists Loaded:",TYPE_VERBOSE);
-writeLog("-> APIs Loaded: $display_API_list",TYPE_VERBOSE);
+writeLog("-> APIs Loaded: $display_API_list (Source: " . getConfiguration("global","api_list") . ")",TYPE_VERBOSE);
 writeLog("-> Valid Icon Types: " . getValidTypes(),TYPE_VERBOSE);
 writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
 writeLog("Options:",TYPE_VERBOSE);
@@ -2696,6 +2712,15 @@ function isValidAPIElement($element) {
   return $retval;
 }
 
+function loadDefaultAPIs($clear = false) {
+  if ($clear) { emptyAPIList(); }
+  addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/<SIZE>",false,DEFAULT_ENABLE_APIS);
+  addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons" => "icons","link" => "src","sizeWxH" => "sizes","mime" => "type","error" => "error"));
+  addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
+  addAPI("iconhorse","https://icon.horse/icon/<DOMAIN>",false,DEFAULT_ENABLE_APIS);
+  setConfiguration("global","api_list","internal");
+}
+
 /* Add an API */
 function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array(),$display = null,$apikey = null) {
   global $apiList;
@@ -2843,6 +2868,13 @@ function getEmptyAPIEntry() {
     "verb" => null,
   );  
   return $return_object;
+}
+
+/* Empty API List */
+function emptyAPIList() {
+  global $apiList;
+  $apiList = array();
+  refreshAPIList();
 }
 
 /* Lookup API */
@@ -3586,7 +3618,6 @@ function determineCapabilities() {
   $flag_gmagick = false;
   $flag_imagemagick = false;
   
-  
   if (php_sapi_name() == "cli") { $flag_console = true; }
   if (extension_loaded("curl")) { if (function_exists('curl_version')) { $flag_curl = true; } }
   if (function_exists('file_get_contents')) { $flag_get_contents = true; }
@@ -3626,7 +3657,20 @@ function determineCapabilities() {
     addCapability("os","case_sensitive",true);
     addCapability("os","directory_separator","/");
   }
-    
+}
+
+function showCapabilities($level = TYPE_VERBOSE) {
+  writeLog("Capabilities:",TYPE_VERBOSE);
+  writeLog("* Extension EXIF Enabled: " . showBoolean(getCapability("php","exif")),TYPE_VERBOSE);
+  writeLog("* Extension FileInfo Enabled: " . showBoolean(getCapability("php","fileinfo")),TYPE_VERBOSE);
+  writeLog("* Extension GD Enabled: " . showBoolean(getCapability("php","gd")),TYPE_VERBOSE);
+  writeLog("* Extension Gmagick Enabled: " . showBoolean(getCapability("php","gmagick")),TYPE_VERBOSE);
+  writeLog("* Extension ImageMagick Enabled: " . showBoolean(getCapability("php","imagemagick")),TYPE_VERBOSE);
+  writeLog("* Extension cURL Enabled: " . showBoolean(getCapability("php","curl")),TYPE_VERBOSE);
+  writeLog("* Function file_get_contents Available: " . showBoolean(getCapability("php","get")),TYPE_VERBOSE);
+  writeLog("* Function file_put_contents Available: " . showBoolean(getCapability("php","put")),TYPE_VERBOSE);
+  writeLog("* Function hrtime Available: " . showBoolean(getCapability("php","hrtime")),TYPE_VERBOSE);
+  writeLog("* Function mime_content_type Available: " . showBoolean(getCapability("php","mimetype")),TYPE_VERBOSE);
 }
  
 /*  Validate Configuration */
@@ -3710,3 +3754,4 @@ function validateConfiguration() {
   }
   debugSection();
 }
+
