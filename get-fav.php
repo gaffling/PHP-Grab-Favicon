@@ -163,6 +163,24 @@ PHP Grab Favicon
 
 > This `PHP Favicon Grabber` use a given url, save a copy (if desired) and return the image path.
 
+Requirements
+------------
+You'll need an installed and configured PHP.
+
+The following extensions are recommended:
+* curl
+* fileinfo
+* mbstring (required by exif)
+* exif
+
+While they are not required, the script will not be as effective.
+
+The script has been tested with PHP 5.6, 7.4, 8.1 and 8.2.  
+PHP 7.4 and later is recommended due to some improvements in identifying content-types.
+
+For accurate logging timestamps, it is recommended that your PHP installation has the [Date] section of PHP.ini correctly set.
+
+
 How it Works
 ------------
 
@@ -174,6 +192,19 @@ How it Works
 6. If there is still no favicon we attempt to get one using a random API
 7. If favicon should be saved try to load the favicon URL
 8. If a local copy is desired, it will be saved and the pathname will be shown
+
+
+API
+----------
+The following API's are supported "out of the box".
+
+* FavIconKit        https://faviconkit.com/
+* FavIconGrabber    https://favicongrabber.com/
+* Google            https://www.google.com
+* Icon Horse        https://icon.horse/
+
+APIs can be customized, please check the documentation for more information.
+
 
 
 How To Use
@@ -237,7 +268,9 @@ define('ENABLE_SAME_FOLDER_INI',false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202306042323');
+define('PROGRAM_MAJOR_VERSION', 1);
+define('PROGRAM_MINOR_VERSION', 2);
+define('PROGRAM_BUILD', '202306051212');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -367,8 +400,9 @@ $log_handle = null;
 startTimer("program");
 setItem("project_name",PROJECT_NAME);
 setItem("program_name",PROGRAM_NAME);
-setItem("program_version",PROGRAM_VERSION);
+setItem("program_version",PROGRAM_MAJOR_VERSION . "." . PROGRAM_MINOR_VERSION . " (" . PROGRAM_BUILD . ")");
 setItem("banner",getItem("project_name") . " (" .getItem("program_name") . ") v" . getItem("program_version"));
+setItem("copyright",PROGRAM_COPYRIGHT);
 setItem("configuration","defaults");
 
 /*  Populate $capabilities structure to determine what functions can be used */
@@ -532,8 +566,8 @@ $options = getopt($shortopts, $longopts);
 
 /*  Show Version & Exit */
 if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['version']))) {
-  echo PROJECT_NAME . " (" . PROGRAM_NAME . ") v" . PROGRAM_VERSION ."\n";
-  echo PROGRAM_COPYRIGHT . "\n";
+  echo getItem("banner") . "\n";
+  echo getItem("copyright") . "\n";
   exit;
 }
 
@@ -623,6 +657,9 @@ if (isset($options['skip'])) { $options['nooverwrite'] = $options['skip']; }
 
 /*
 **  Load Configuration File
+**
+**  The way the config file works is it's parsed by PHP and merged, directly, with the configuration array structure.
+**  This is why calling validateConfiguration() is important.
 */
 
 if (isset($options['configfile'])) {
@@ -694,7 +731,8 @@ validateConfiguration();
 
 /*  Start Logging (Console/HTML/File) */
 writeLog(getItem("banner"),TYPE_ALL);
-writeLog("PHP Version: " . phpversion(),TYPE_VERBOSE);
+writeLog(getItem("copyright"),TYPE_ALL);
+writeLog("PHP Version: " . getCapability("php","version"),TYPE_VERBOSE);
 if (debugMode()) {
   writeLog("Running Debug Mode",TYPE_VERBOSE);
   writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
@@ -1258,6 +1296,9 @@ function grap_favicon($url) {
               
               writeLog("Icon Is Valid ('$favicon'), ext=$fileExtension, type=$fileContentType, id_method=$fileMethod, method=$method",TYPE_DEBUGGING);
 
+              # TO DO:
+              #   handle subdirectories
+              #   use getCapability("os","directory_separator")
               if ($removeTLD && !is_null($core_domain)) {
                 $filePath = preg_replace('#\/\/#', '/', $directory.'/'.$core_domain.'.'.$fileExtension);
               } else {
@@ -2073,10 +2114,12 @@ function getGlobal($variable) {
 
 /*  Set PHP's User Agent */
 function initializePHPAgent() {
+  debugSection("initializePHPAgent");
   $userAgent = getConfiguration("http","useragent");
   if (is_null($userAgent)) { $userAgent = getConfiguration("http","default_useragent"); }
   if (!is_null($userAgent)) { ini_set('user_agent', $userAgent); }
   if (ini_get("default_socket_timeout") > getConfiguration("http","http_timeout")) { ini_set("default_socket_timeout", getConfiguration("http","http_timeout")); }
+  debugSection();
 }
 
 /*  Show Boolean */
@@ -2231,6 +2274,7 @@ function getFileAsBase64($filePath) {
 
 /*  See if the script is in Debug mode */
 function debugMode() {
+  debugSection("debugMode");
   $retval = false;
   $log_enabled = getConfiguration("logging","enabled");
   $log_level = getConfiguration("logging","level");
@@ -2248,6 +2292,7 @@ function debugMode() {
     if ($console_level & TYPE_TRACE) { $retval = true; }
     if ($console_level & TYPE_SPECIAL) { $retval = true; }
   }
+  debugSection();
   return $retval;
 }
 
@@ -2489,8 +2534,10 @@ function debugSection($section = null) {
 
 /* format timestamp with some defaults */
 function getTimestamp($format = null,$time = null) {
+  debugSection("getTimestamp");
   if (is_null($format)) { $format = DEFAULT_LOG_TIMESTAMP_FORMAT; }
   if (is_null($time)) { $time = time(); }
+  debugSection();
   return date($format,$time);
 }
 
@@ -2499,120 +2546,125 @@ function getTimestamp($format = null,$time = null) {
 **
 */
 function setConfiguration($scope = "global",$option = null,$value = null,$default = null,$type = CONFIG_TYPE_SCALAR) {
+  debugSection("setConfiguration");
   global $configuration;
   $flag_fallback = true;
   $flag_handled = false;
-  
   if (!is_null($option)) {
-    $option = normalizeKey($option);
-    if (isset($value)) {
-      switch ($type) {
-        case CONFIG_TYPE_PATH:            /* Validate Path */
-          if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
-          break;
-        case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
-          if (is_bool($value)) { $flag_fallback = false; }
-          break;
-        case CONFIG_TYPE_STRING:          /* Validate String */
-          if (is_string($value)) { $flag_fallback = false; }
-          break;
-        case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
-          if (is_numeric($value)) { $flag_fallback = false; }
-          break;
-        case CONFIG_TYPE_SWITCH:          /* Validate Switch */
-          if (isset($value)) {
-            $flag_fallback = false;
-            $value = true;
-          }
-          break;
-        case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
-          $flag_handled = true;
-          if (isset($value)) {
-            $flag_handled = true;
-            $configuration[$scope][$option] = true;
-          }
-          if (isset($default)) {
-            $flag_handled = true;
-            $configuration[$scope][$option] = false;
-          }
-          break;
-        case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
-          if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
-          if (isset($value)) {
-            if (!is_null($value)) {
+    if (is_string($option)) {
+      $option = normalizeKey($option);
+      if (isset($value)) {
+        switch ($type) {
+          case CONFIG_TYPE_PATH:            /* Validate Path */
+            if (isset($value)) { if (file_exists($value)) { $flag_fallback = false; } }
+            break;
+          case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+            if (is_bool($value)) { $flag_fallback = false; }
+            break;
+          case CONFIG_TYPE_STRING:          /* Validate String */
+            if (is_string($value)) { $flag_fallback = false; }
+            break;
+          case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+            if (is_numeric($value)) { $flag_fallback = false; }
+            break;
+          case CONFIG_TYPE_SWITCH:          /* Validate Switch */
+            if (isset($value)) {
               $flag_fallback = false;
-              if (strtolower($value) == "none") {
-                $value = null;
+              $value = true;
+            }
+            break;
+          case CONFIG_TYPE_SWITCH_PAIR:     /* Validate Switch Pair, $value = true, $default = false option */
+            $flag_handled = true;
+            if (isset($value)) {
+              $flag_handled = true;
+              $configuration[$scope][$option] = true;
+            }
+            if (isset($default)) {
+              $flag_handled = true;
+              $configuration[$scope][$option] = false;
+            }
+            break;
+          case CONFIG_TYPE_USERAGENT:       /* Validate User Agent */
+            if (is_null($default)) { $default = getConfiguration("http","default_useragent"); }
+            if (isset($value)) {
+              if (!is_null($value)) {
+                $flag_fallback = false;
+                if (strtolower($value) == "none") {
+                  $value = null;
+                }
               }
             }
-          }
-          break;
-        default:                          /* Just see if it's set */
-          if (isset($value)) { $flag_fallback = false; }
-          break;
+            break;
+          default:                          /* Just see if it's set */
+            if (isset($value)) { $flag_fallback = false; }
+            break;
+        }
+      }
+      if (!$flag_handled) {
+        if ($flag_fallback) { $value = $default; }
+        if (isset($value)) { $configuration[$scope][$option] = $value; }
       }
     }
-        
-    if (!$flag_handled) {
-      if ($flag_fallback) { $value = $default; }
-      if (isset($value)) { $configuration[$scope][$option] = $value; }
-    }
   }
+  debugSection();
 }
 
 function getConfiguration($scope = "global",$option = null) {
+  debugSection("getConfiguration");
   global $configuration;
-  
   $value = null;
   if (!is_null($option)) {
     $option = normalizeKey($option);
     if (isset($configuration[$scope][$option])) { $value = $configuration[$scope][$option]; }
   }
-  
+  debugSection();
   return $value;
 }
 
+/*  Validate a Configuration Setting */
 function validateConfigurationSetting($scope = "global",$option = null,$type = 0,$min = 0,$max = 0) {
+  debugSection("validateConfigurationSetting");
   global $configuration;
-  
   if (!is_null($option)) {
     $option = normalizeKey($option);
-    if (isset($configuration[$scope][$option])) {
-      $value = $configuration[$scope][$option];
-      switch ($type) {
-        case CONFIG_TYPE_PATH:            /* Validate Path */
-          if (isset($value)) {
-            if (!file_exists($value)) {
-              $value = null;
+    if (is_string($option)) {
+      if (isset($configuration[$scope][$option])) {
+        $value = $configuration[$scope][$option];
+        switch ($type) {
+          case CONFIG_TYPE_PATH:            /* Validate Path */
+            if (isset($value)) {
+              if (!file_exists($value)) {
+                $value = null;
+              }
             }
-          }
-          if ((!isset($value)) || (is_null($value))) {
-            if ($min == 0) {
-              $min = DEFAULT_LOCAL_PATH;
+            if ((!isset($value)) || (is_null($value))) {
+              if ($min == 0) {
+                $min = DEFAULT_LOCAL_PATH;
+              }
+              $configuration[$scope][$option] = $min;
             }
-            $configuration[$scope][$option] = $min;
-          }
-          break;
-        case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
-          $value = setRange($value,$min,$max);
-          if (is_numeric($value)) { $configuration[$scope][$option] = $value; }
-          break;
-        case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
-          if (!is_bool($value)) {
-            $value = setBoolean($value);
-            if (is_bool($value)) { $configuration[$scope][$option] = $value; }
-          } 
-          break;
+            break;
+          case CONFIG_TYPE_NUMERIC:         /* Validate Numeric */
+            $value = setRange($value,$min,$max);
+            if (is_numeric($value)) { $configuration[$scope][$option] = $value; }
+            break;
+          case CONFIG_TYPE_BOOLEAN:         /* Validate Boolean */
+            if (!is_bool($value)) {
+              $value = setBoolean($value);
+              if (is_bool($value)) { $configuration[$scope][$option] = $value; }
+            } 
+            break;
+        }
       }
     }
   }
+  debugSection();
 }
 
 /*  Validate URL List */
 function validateURLList() {
   debugSection("validateURLList");
   global $URLList;
-  
   $counter = 0;
   $temp = array();
   if (empty($URLList)) {
@@ -2662,12 +2714,19 @@ function validateURLList() {
   debugSection();
 }
 
+/*  Normalize a Key */
 function normalizeKey($key) {
+  debugSection("normalizeKey");
   if (isset($key)) {
     if (!is_null($key)) {
-      $key = strtolower($key);
+      if (is_string($key)) {
+        $key = strtolower($key);
+      } else {
+        $key = null;
+      }
     }
   }
+  debugSection();
   return $key;
 }
 
@@ -2691,58 +2750,92 @@ function normalizeKey($key) {
 **        size        the field for the size of the icon (in pixels, assumes square)
 **    apikey is implemented.
 **
-**
 */
 
 /*  Check if element is valid for API Structure */
 function isValidAPIElement($element) {
+  debugSection("isValidAPIElement");
   $retval = false;
   if (isset($element)) {
     if (!is_null($element)) {
-      $element = normalizeKey($element);
-      if ($element == "display") { $retval = true; }
-      if ($element == "name") { $retval = true; }
-      if ($element == "url") { $retval = true; }
-      if ($element == "json") { $retval = true; }
-      if ($element == "enabled") { $retval = true; }
-      if ($element == "json_structure") { $retval = true; }
-      if ($element == "apikey") { $retval = true; }
+      if (is_string($element)) {
+        $element = normalizeKey($element);
+        if ($element == "display") { $retval = true; }
+        if ($element == "name") { $retval = true; }
+        if ($element == "url") { $retval = true; }
+        if ($element == "json") { $retval = true; }
+        if ($element == "enabled") { $retval = true; }
+        if ($element == "json_structure") { $retval = true; }
+        if ($element == "apikey") { $retval = true; }
+      }
     }
   }
+  debugSection();  
   return $retval;
 }
 
 function loadDefaultAPIs($clear = false) {
+  debugSection("loadDefaultAPIs");
   if ($clear) { emptyAPIList(); }
   addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/<SIZE>",false,DEFAULT_ENABLE_APIS);
   addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons" => "icons","link" => "src","sizeWxH" => "sizes","mime" => "type","error" => "error"));
   addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
   addAPI("iconhorse","https://icon.horse/icon/<DOMAIN>",false,DEFAULT_ENABLE_APIS);
   setConfiguration("global","api_list","internal");
+  debugSection();
+  return $clear;
 }
 
 /* Add an API */
 function addAPI($name,$url,$json = false,$enabled = true,$json_structure = array(),$display = null,$apikey = null) {
+  debugSection("addAPI");
   global $apiList;
-  $name = normalizeKey($name);
-  if (is_null($display)) { $display = $name; }
-  # TO DO:
-  #   check to see if it already exists
-  $entry = array(
-    "display" => $display,
-    "name" => $name,
-    "url" => $url,
-    "json" => setBoolean($json),
-    "enabled" => setBoolean($enabled),
-    "json_structure" => $json_structure,
-    "apikey" => $apikey,
-  );
-  array_push($apiList,$entry);
-  refreshAPIList();
+  $retval = false;
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (isAPIDefined($name)) {
+      # API already exists
+    } else {
+      if (is_null($display)) { $display = $name; }
+      $entry = array(
+        "display" => $display,
+        "name" => $name,
+        "url" => $url,
+        "json" => setBoolean($json),
+        "enabled" => setBoolean($enabled),
+        "json_structure" => $json_structure,
+        "apikey" => $apikey,
+      );
+      array_push($apiList,$entry);
+      refreshAPIList();
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
+function isAPIDefined($name) {
+  debugSection("isAPIDefined");
+  global $apiList;
+  $retval = false;
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    foreach ($apiList as $item) {
+      if (isset($item['name'])) {
+        if ($item['name'] == $name) {
+          $retval = true;
+          break;
+        }
+      }
+    }
+  }
+  debugSection();
+  return $retval;
 }
 
 /*  Return a List of Enabled APIs as an Array */
 function getAPIIndex() {
+  debugSection("getAPIIndex");
   global $apiList;
   $retval = array();
   if (!empty($apiList)) {
@@ -2756,11 +2849,13 @@ function getAPIIndex() {
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
 /*  Get a List of APIs */
 function getAPIList($displayName = false) {
+  debugSection("getAPIList");
   global $apiList;
   $retval = null;
   $counter = 0;
@@ -2779,14 +2874,18 @@ function getAPIList($displayName = false) {
     }
   }
   if (is_null($retval)) { if ($displayName) { $retval = "None"; } else { $retval = "none"; } }
+  debugSection();
   return $retval;
 }
 
 /*  Refresh API List */
 function refreshAPIList($isenabled = true) {
+  debugSection("refreshAPIList");
   global $apiList; 
+  $retval = false;
   $count = 0;
   if (!empty($apiList)) {
+    $retval = true;
     foreach ($apiList as $item) {
       if (isset($item['display'])) { $api_display = $item['display']; } else { $api_display = null; }
       if (isset($item['name'])) { $api_name = $item['name']; } else { $api_name = null; }
@@ -2805,25 +2904,33 @@ function refreshAPIList($isenabled = true) {
     }
   }
   setItem("api_count",$count);
+  debugSection();
+  return $retval;
 }
 
 /*  Return a count of APIs */
 function getAPICount($isenabled = true) {
+  debugSection("getAPICount");
   $api_count = getItem("api_count");
   if (!isset($api_count)) { 
     refreshAPIList($isenabled);
     $api_count = getItem("api_count");
   }
+  debugSection();
   return $api_count;
 }
 
 /* Return an API object */
 function getAPI($name) {
-  return lookupAPI('name',$name);
+  debugSection("getAPI");
+  $return_object = lookupAPI('name',$name);
+  debugSection();
+  return $return_object;
 }
 
 /* Return the Name of a Random API */
 function getRandomAPIName() {
+  debugSection("getRandomAPIName");
   global $apiList;
   $api_name = null;
   $api_count = getAPICount();
@@ -2832,11 +2939,13 @@ function getRandomAPIName() {
     shuffle($api_index);
     $api_name = array_shift($api_index);
   }
+  debugSection();
   return $api_name;
 }
 
 /* Select a Random API */
 function getRandomAPI() {
+  debugSection("getRandomAPI");
   global $apiList;
   $api_count = getAPICount();
   $return_object = getEmptyAPIEntry();
@@ -2852,11 +2961,13 @@ function getRandomAPI() {
       }
     }
   }
+  debugSection();
   return $return_object;
 }
 
 /*  Get a Null API Entry */
 function getEmptyAPIEntry() {
+  debugSection("getEmptyAPIEntry");
   $return_object = array(
     "display" => null,
     "name" => null,
@@ -2867,46 +2978,57 @@ function getEmptyAPIEntry() {
     "apikey" => null,
     "verb" => null,
   );  
+  debugSection();
   return $return_object;
 }
 
 /* Empty API List */
 function emptyAPIList() {
+  debugSection("emptyAPIList");
   global $apiList;
   $apiList = array();
   refreshAPIList();
+  debugSection();
 }
 
 /* Lookup API */
 function lookupAPI($element,$value) {
+  debugSection("lookupAPI");
   global $apiList;
-  $element = normalizeKey($element);
   $return_object = getEmptyAPIEntry();
-  if (isValidAPIElement($element)) {
-    foreach ($apiList as $item) {
-      if (!is_null($item['name'])) {
-        if (isset($item[$element])) {
-          if (strcasecmp($item[$element], $value) == 0) {
-            $return_object = array();
-            $return_object = $item;
-            break;
+  if (is_string($element)) {
+    $element = normalizeKey($element);
+    if (isValidAPIElement($element)) {
+      foreach ($apiList as $item) {
+        if (!is_null($item['name'])) {
+          if (isset($item[$element])) {
+            if (strcasecmp($item[$element], $value) == 0) {
+              $return_object = array();
+              $return_object = $item;
+              break;
+            }
           }
         }
       }
     }
   }
+  debugSection();
   return $return_object;
 }
 
 /*  Populate API URL */
 function getAPIurl($url,$domain,$size = 0,$apikey = null) {
-  if (!is_numeric($size)) { $size = 0; }
-  if ($size == 0) { $size = getConfiguration("global","icon_size"); }
-  
-  $processed_url = $url;
-  if (!is_null($domain)) { $processed_url = str_replace("<DOMAIN>",$domain,$processed_url); }
-  if ($size != 0) { $processed_url = str_replace("<SIZE>",$size,$processed_url); }
-  if (!is_null($apikey)) { $processed_url = str_replace("<APIKEY>",$apikey,$processed_url); }
+  debugSection("getAPIurl");
+  $processed_url = null;
+  if ((is_string($url)) && (is_string($domain))) {
+    if (!is_numeric($size)) { $size = 0; }
+    if ($size == 0) { $size = getConfiguration("global","icon_size"); }
+    $processed_url = $url;
+    if (!is_null($domain)) { $processed_url = str_replace("<DOMAIN>",$domain,$processed_url); }
+    if ($size != 0) { $processed_url = str_replace("<SIZE>",$size,$processed_url); }
+    if (!is_null($apikey)) { $processed_url = str_replace("<APIKEY>",$apikey,$processed_url); }
+  }
+  debugSection();
   return $processed_url;
 }
 
@@ -2914,20 +3036,35 @@ function getAPIurl($url,$domain,$size = 0,$apikey = null) {
 ** Capability Controller
 */
 function addCapability($scope = "global", $capability = null,$value = false) {
+  debugSection("addCapability");
   global $capabilities;
-  if (!is_null($capability)) {
-    $capability = normalizeKey($capability);
-    $capabilities[$scope][$capability] = $value;
+  $retval = false;
+  if (is_string($scope)) {
+    if (!is_null($capability)) {
+      $capability = normalizeKey($capability);
+      if (is_string($capability)) {
+        $capabilities[$scope][$capability] = $value;
+        $retval = true;
+      }
+    }
   }
+  debugSection();
+  return $retval;
 }
 
 function getCapability($scope = "global", $capability = null) {
+  debugSection("getCapability");
   global $capabilities;
   $value = false;
-  if (!is_null($capability)) {
-    $capability = normalizeKey($capability);
-    if (isset($capabilities[$scope][$capability])) { $value = $capabilities[$scope][$capability]; }
+  if (is_string($scope)) {
+    if (!is_null($capability)) {
+      if (is_string($capability)) {
+        $capability = normalizeKey($capability);
+        if (isset($capabilities[$scope][$capability])) { $value = $capabilities[$scope][$capability]; }
+      }
+    }
   }
+  debugSection();
   return $value;
 }
 
@@ -2935,29 +3072,36 @@ function getCapability($scope = "global", $capability = null) {
 ** Blocklist Controller
 */
 function addBlocklist($value) {
+  debugSection("addBlocklist");
   global $blockList;
   $retval = false;
-  if (isset($value)) {
-    if (!searchBlocklist($value)) {
-      array_push($blockList,strtolower($value));
-      $retval = true;
+  if (is_string($value)) {
+    if (isset($value)) {
+      if (!searchBlocklist($value)) {
+        array_push($blockList,strtolower($value));
+        $retval = true;
+      }
     }
   }
+  debugSection();
   return $retval;
 }
 
 function searchBlocklist($value) {
+  debugSection("searchBlocklist");
   global $blockList;
-
   $retval = false;
   if (isset($value)) {
-    foreach ($blockList as $item) {
-      if (strcasecmp($item, $value) == 0) {
-        $retval = true;
-        break;
+    if (is_string($value)) {
+      foreach ($blockList as $item) {
+        if (strcasecmp($item, $value) == 0) {
+          $retval = true;
+          break;
+        }
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
@@ -2965,16 +3109,20 @@ function searchBlocklist($value) {
 ** List Controller
 */
 function loadList($list) {
+  debugSection("loadList");
   $retval = array();
   if (isset($list)) {
-    if (file_exists($list)) {
-      $retval = file($list,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    } else {
-      if (count($retval) == 0) {
-        $retval = explode(",",str_replace(array(",",";"," "),",",$list));
+    if (is_string($list)) {
+      if (file_exists($list)) {
+        $retval = file($list,FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+      } else {
+        if (count($retval) == 0) {
+          $retval = explode(",",str_replace(array(",",";"," "),",",$list));
+        }
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
@@ -2982,63 +3130,131 @@ function loadList($list) {
 **  Internal Data Controller
 */
 function setItem($name,$value = null) {
+  debugSection("setItem");
   global $internalData;
- 
-  $internalData[$name] = $value;
+  $retval = false;
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    $internalData[$name] = $value;
+    $retval = true;
+  }
+  debugSection();
+  return $retval;
 }
 
-function getItem($name,$value = null) {
+function getItem($name) {
+  debugSection("getItem");
   global $internalData;
-
-  if (isset($internalData[$name])) { $value = $internalData[$name]; } else { $value = null; }
+  $value = null;
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (isset($internalData[$name])) { $value = $internalData[$name]; }
+  }
+  debugSection();
   return $value;
 }
 
 /*
 **  Statistics Controller
 */
-function addStatistic($name,$value = null) {
+function addStatistic($name,$value = null, $replaceIfTrue = false) {
+  debugSection("addStatistic");
   global $statistics;
-  # TO DO:
-  #   check to see if it already exists
-  $name = normalizeKey($name);
-  if (is_null($value)) { $statistics[$name] = 0; } else { $statistics[$name] = $value; }
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (!isStatisticDefined($name,$replaceIfTrue)) {
+      if (is_null($value)) { $statistics[$name] = 0; } else { $statistics[$name] = $value; }
+    }
+  }
+  debugSection();
+}
+
+/*
+**  Does Statistic Exist
+*/
+function isStatisticDefined($name, $deleteIfTrue = false) {
+  debugSection("isStatisticDefined");
+  global $statistics;
+  $retval = false;
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    foreach ($statistics as $item) {
+      if (isset($item['name'])) {
+        if ($item['name'] == $name) {
+          $retval = true;
+          break;
+        }
+      }
+    }
+  }
+  if (($retval) && ($deleteIfTrue)) {
+    if (deleteStatistic($name)) {
+      $retval = false;
+    }
+  }
+  debugSection();
+  return $retval;
 }
 
 function updateStatistic($name,$value) {
+  debugSection("updateStatistic");
   global $statistics;
-  
-  $name = normalizeKey($name);
-  if (isset($statistics[$name])) { if (!is_null($value)) { $statistics[$name] = $value; } }
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (isset($statistics[$name])) { if (!is_null($value)) { $statistics[$name] = $value; } }
+  }
+  debugSection();
 }
 
 function incrementStatistic($name,$value = 1) {
+  debugSection("incrementStatistic");
   global $statistics;
-
-  $name = normalizeKey($name);
-  if (isset($statistics[$name])) { if (!is_null($value)) { $statistics[$name] += $value; } }
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (is_numeric($value)) {
+      if (isset($statistics[$name])) { if (!is_null($value)) { $statistics[$name] += $value; } }
+    }
+  }
+  debugSection();
 }
 
 function decrementStatistic($name,$value = 1) {
+  debugSection("decrementStatistic");
   global $statistics;
-  
-  $name = normalizeKey($name);
-  if (isset($statistics[$name])) { if (!is_null($value)) { $statistics[$name] -= $value; } }
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (is_numeric($value)) {
+      if (isset($statistics[$name])) { if (!is_null($value)) { $statistics[$name] -= $value; } }
+    }
+  }
+  debugSection();
 }
 
 function getStatistic($name) {
+  debugSection("getStatistic");
   global $statistics;
-  
   $retval = 0;
-  
-  $name = normalizeKey($name);
-  if (isset($statistics[$name])) { $retval = $statistics[$name]; }
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (isset($statistics[$name])) { $retval = $statistics[$name]; }
+  }
+  debugSection();
   return $retval;
 }
 
 function deleteStatistic($name) {
-  # TO DO:
-  #   write function
+  debugSection("deleteStatistic");
+  global $statistics;
+  $retval = false;
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    if (isset($statistics[$name])) {
+      unset($statistics[$name]);
+      $retval = true;
+    }
+ }
+ debugSection();
+ return $retval;
 }
 
 /*
@@ -3058,48 +3274,86 @@ function deleteStatistic($name) {
 **    state       current status (numeric lookup)
 **    updated     was an updated icon found? (boolean)
 **    accepted    icon has met requirements (if state is STATE_FOUND)
-
+**
+**  Usage:
+**    Most of the functions are framework, these are the main ones:
+**
+**    addProcessEntry($url)     
+**    updateProcessEntry($url,$element,$value)
+**    isIconAccepted($url)
+**    
+**
 */
+
+/*  Is the element valid? */
 function isValidProcessElement($element) {
+  debugSection("isValidProcessElement");
   $retval = false;
   if (isset($element)) {
     if (!is_null($element)) {
-      $element = normalizeKey($element);
-      if ($element == "url") { $retval = true; }
-      if ($element == "favicon") { $retval = true; }
-      if ($element == "icontype") { $retval = true; }
-      if ($element == "method") { $retval = true; }
-      if ($element == "local") { $retval = true; }
-      if ($element == "hash") { $retval = true; }
-      if ($element == "tries") { $retval = true; }
-      if ($element == "overwrite") { $retval = true; }
-      if ($element == "saved") { $retval = true; }
-      if ($element == "elapsed") { $retval = true; }
-      if ($element == "state") { $retval = true; }
-      if ($element == "updated") { $retval = true; }
-      if ($element == "accepted") { $retval = true; }
-    }
-  }
-  return $retval;
-}
-
-function addProcessEntry($url) {
-  global $processed;
-  $retval = false;
-  if (is_string($url)) {
-    $entry = getProcessEntry('url',normalizeKey($url));
-    if (!isset($entry['url'])) {
-      if (is_null($entry['url'])) {
-        $entry['url'] = normalizeKey($url);
-        array_push($processed,$entry);
-        $retval = true;
+      if (is_string($element)) {
+        $element = normalizeKey($element);
+        if ($element == "url") { $retval = true; }
+        if ($element == "favicon") { $retval = true; }
+        if ($element == "icontype") { $retval = true; }
+        if ($element == "method") { $retval = true; }
+        if ($element == "local") { $retval = true; }
+        if ($element == "hash") { $retval = true; }
+        if ($element == "tries") { $retval = true; }
+        if ($element == "overwrite") { $retval = true; }
+        if ($element == "saved") { $retval = true; }
+        if ($element == "elapsed") { $retval = true; }
+        if ($element == "state") { $retval = true; }
+        if ($element == "updated") { $retval = true; }
+        if ($element == "accepted") { $retval = true; }
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Add a new Entry */
+function addProcessEntry($url) {
+  debugSection("addProcessEntry");
+  global $processed;
+  $retval = false;
+  if (is_string($url)) {
+    if (isProcessDefined($url)) {
+      writeLog("'$url' already has a processed entry",TYPE_TRACE);
+    } else {
+      $entry['url'] = normalizeKey($url);
+      array_push($processed,$entry);
+      $retval = true;
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
+/*  Is it a valid entry? */
+function isProcessDefined($url) {
+  debugSection("isProcessDefined");
+  global $processed;
+  $retval = false;
+  if (is_string($url)) {
+    $url = normalizeKey($url);
+    foreach ($processed as $item) {
+      if (isset($item['url'])) {
+        if ($item['url'] == $url) {
+          $retval = true;
+          break;
+        }
+      }
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
+/*  Update an Entry */
 function updateProcessEntry($url,$element,$value = null) {
+  debugSection("updateProcessEntry");
   global $processed;
   $retval = false;
   if (is_string($url)) {
@@ -3114,10 +3368,13 @@ function updateProcessEntry($url,$element,$value = null) {
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Update the Structure */
 function updateProcessRecord($entry) {
+  debugSection("updateProcessRecord");
   global $processed;
   $retval = false;
   if (is_array($entry)) {
@@ -3129,10 +3386,13 @@ function updateProcessRecord($entry) {
       }
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Return an Empty Object */
 function getEmptyProcessEntry() {
+  debugSection("getEmptyProcessEntry");
   $return_object = array(
     "url" => null,
     "favicon" => null,
@@ -3148,10 +3408,13 @@ function getEmptyProcessEntry() {
     "updated" => false,
     "accepted" => false,
   );
+  debugSection();
   return $return_object;
 }
 
+/*  Get Process Entry */
 function getProcessEntry($element,$value) {
+  debugSection("getProcessEntry");
   global $processed;
   $return_object = getEmptyProcessEntry();
   if (is_string($element)) {
@@ -3167,11 +3430,14 @@ function getProcessEntry($element,$value) {
       }
     }
   }
+  debugSection();
   return $return_object;
 }
 
 /*  Shortcut Functions  */
+/*  Shortcut to see if Icon is "Wanted" */
 function isIconWanted($url) {
+  debugSection("isIconWanted");
   $retval = false;
   if (is_string($url)) {
     $object = getProcessEntry("url",$url);
@@ -3179,10 +3445,13 @@ function isIconWanted($url) {
       if (isset($object['state'])) { if ($object['state'] == STATE_WANTED) { $retval = true; } }
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Shortcut to see if Icon is "Accepted" */
 function isIconAccepted($url) {
+  debugSection("isIconAccepted");
   $retval = false;
   if (is_string($url)) {
     $object = getProcessEntry("url",$url);
@@ -3194,34 +3463,70 @@ function isIconAccepted($url) {
       }
     }
   }
+  debugSection();
   return $retval;
 }
 /*
 **  Last Load Result Controller
+**
+**  NOTE:
+**    This is always only *one* last load record.
+**
+**
+**  This is a storage array to buffer loading
+**    url             url accessed (key)
+**    method          method used (string)
+**    content_type    MIME content type (if known)
+**    http_code       HTTP Response (if known/applicable)
+**    scheme          Protocol Used (null if file)
+**    content         The data
+**    hash            Hash of the data
+**    valid           Is this record valid? (boolean)
+**    error           Is there an error? (boolean)
+**    response        Response Text (string)
+**    response_code   Intepreted Response Code
+**    added           Unix time when this record was added
+**
+**  Usage:
+**    lastLoadResult($url,$method,$content_type,$http_code,$scheme,$protocol,$content)
+**    getLastLoadResult($element)
+**    zeroLastLoadResult()          
+**
+**    With getLastLoadResult if the $element parameter is omitted, the entire record is returned.
+**
 */
+
+/*  Is the element valid? */
 function isValidLastLoadElement($element) {
+  debugSection("isValidLastLoadElement");
   $retval = false;
   if (isset($element)) {
     if (!is_null($element)) {
-      $element = normalizeKey($element);
-      if ($element == "url") { $retval = true; }
-      if ($element == "method") { $retval = true; }
-      if ($element == "content_type") { $retval = true; }
-      if ($element == "http_code") { $retval = true; }
-      if ($element == "scheme") { $retval = true; }
-      if ($element == "protocol") { $retval = true; }
-      if ($element == "content") { $retval = true; }
-      if ($element == "hash") { $retval = true; }
-      if ($element == "valid") { $retval = true; }
-      if ($element == "error") { $retval = true; }
-      if ($element == "response") { $retval = true; }
-      if ($element == "response_code") { $retval = true; }
+      if (is_string($element)) {
+        $element = normalizeKey($element);
+        if ($element == "url") { $retval = true; }
+        if ($element == "method") { $retval = true; }
+        if ($element == "content_type") { $retval = true; }
+        if ($element == "http_code") { $retval = true; }
+        if ($element == "scheme") { $retval = true; }
+        if ($element == "protocol") { $retval = true; }
+        if ($element == "content") { $retval = true; }
+        if ($element == "hash") { $retval = true; }
+        if ($element == "valid") { $retval = true; }
+        if ($element == "error") { $retval = true; }
+        if ($element == "response") { $retval = true; }
+        if ($element == "response_code") { $retval = true; }
+        if ($element == "added") { $retval = true; }
+      }
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Is the current structure valid? */
 function isLastLoadResultValid() {
+  debugSection("isLastLoadResultValid");
   global $lastLoad;
   $retval = false;
   if (isset($lastLoad['valid'])) {
@@ -3229,10 +3534,13 @@ function isLastLoadResultValid() {
       $retval = $lastLoad['valid'];
     }
   }
+  debugSection();
   return $retval;
 }
 
+/*  Populate Structure */
 function lastLoadResult($url = null,$method = null,$content_type = null,$http_code = null,$scheme = null,$protocol = null,$content = null) {
+  debugSection("lastLoadResult");
   global $lastLoad;
   $retval = false;
   if (!is_null($url)) { $retval = true; }
@@ -3249,19 +3557,27 @@ function lastLoadResult($url = null,$method = null,$content_type = null,$http_co
     "content" => $content,
     "hash" =>  md5($content),
     "valid" => setBoolean($retval),
+    "added" => time(),
     "error" => $is_error,
     "response" => $RequestResponse['description'],
     "response_code" => $RequestResponse['code'],
   );
+  debugSection();
   return $retval;
 }
 
+/*  Destroy Structure */
 function zeroLastLoadResult() {
+  debugSection("zeroLastLoadResult");
   global $lastLoad;
   $lastLoad = getEmptyLastLoadResult();
+  debugSection();
+  return true;
 }
 
+/*  Return an Empty Structure */
 function getEmptyLastLoadResult() {
+  debugSection("getEmptyLastLoadResult");
   $entry = array(
     "url" => null,
     "method" => null,
@@ -3271,31 +3587,48 @@ function getEmptyLastLoadResult() {
     "protocol" => null,
     "content" => null,
     "hash" =>  null,
-    "valid" => false,  
-    "error" => true,  
+    "valid" => false,
+    "error" => true,
+    "added" => -1,
     "response" => "EMPTY_RECORD",
     "response_code" => "(null)",
   );
+  debugSection();
   return $entry;
 }
 
+/*  Get Structure or Element From It */
 function getLastLoadResult($element = null) {
+  debugSection("getLastLoadResult");
   global $lastLoad;
   $return_data = getEmptyLastLoadResult();
   if (is_null($element)) {
     $return_data = $lastLoad;
   } else {
-    $element = normalizeKey($element);
-    if (isset($lastLoad[$element])) {
-      $return_data = $lastLoad[$element];
+    if (is_string($element)) {
+      $element = normalizeKey($element);
+      if (isset($lastLoad[$element])) {
+        $return_data = $lastLoad[$element];
+      }
     }
   }
+  debugSection();
   return $return_data;
 }
 
 /*  Timers
 **
 **  At least one second precision, more depending on PHP version and extensions
+**
+**  Structure:
+**    name          key
+**    start         start time
+**    type          Type of timer used
+**    finish        finish time
+**    elapsed       elapsed time (microseconds)
+**    elapsed_hr    elapsed time (high resolution)
+**    running       timer active? (boolean)
+**      
 **
 **  Usage:
 **    startTimer("name")      : starts the timer, returns start time or -1 if error
@@ -3310,9 +3643,13 @@ function getLastLoadResult($element = null) {
 **
 **  Once a timer is started, the end timer will try to use the same method that the start used.
 */
+
+/*  Get Time  */
 function getTime($request_type = TIME_TYPE_ANY) {
+  debugSection("getTime");
   $time = null;
   $type = null;
+  if (!is_numeric($request_type)) { $request_type = TIME_TYPE_ANY; }
   if (is_null($time)) {
     if (($request_type == TIME_TYPE_ANY) || ($request_type == TIME_TYPE_HRTIME)) {
       if (getCapability("php","hrtime")) { 
@@ -3347,13 +3684,14 @@ function getTime($request_type = TIME_TYPE_ANY) {
     "time" => floatval($time),
     "type" => $type,
   );
+  debugSection();
   return $retval;
 }
 
+/*  Start Timer */
 function startTimer($name,$type = TIME_TYPE_ANY) {
   debugSection("startTimer");
   global $timers;
-
   $retval = null;
   $name = normalizeKey($name);
   $flag_start_timer = false;
@@ -3367,7 +3705,6 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
       $flag_start_timer = true;
     }
   }
-    
   if ($flag_start_timer) {
     $entry = getEmptyTimer();
     $stopwatch = getTime($type);
@@ -3393,10 +3730,10 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
   return $retval;
 }
 
+/*  Stop Timer */
 function stopTimer($name,$elapsed = false) {
   debugSection("stopTimer");
   global $timers;
-  
   $retval = null;
   $name = normalizeKey($name);
   $found_key = array_search($name, array_column($timers, 'name'));
@@ -3444,7 +3781,9 @@ function stopTimer($name,$elapsed = false) {
   return $retval;
 }
 
+/*  Get Empty Timer */
 function getEmptyTimer() {
+  debugSection("getEmptyTimer");
   $entry = array(
     "name" => null,
     "start" => null,
@@ -3454,31 +3793,33 @@ function getEmptyTimer() {
     "elapsed_hr" => -1,
     "running" => false,
   );
+  debugSection();
   return $entry;
 }
 
+/*  Get Timer Value */
 function getTimer($name) {
   debugSection("getTimer");
   global $timers;
-  
   $entry = getEmptyTimer();
-  
-  $name = normalizeKey($name);
-  $found_key = array_search($name, array_column($timers, 'name'));
-  if ($found_key !== false) {
-    writeLog("Returning timer object '$name' ($found_key) as requested",TYPE_SPECIAL);
-    $entry = $timers[$found_key];
-  } else {
-    writeLog("Timer object '$name' was requested but not found",TYPE_SPECIAL);
+  if (is_string($name)) {
+    $name = normalizeKey($name);
+    $found_key = array_search($name, array_column($timers, 'name'));
+    if ($found_key !== false) {
+      writeLog("Returning timer object '$name' ($found_key) as requested",TYPE_SPECIAL);
+      $entry = $timers[$found_key];
+    } else {
+      writeLog("Timer object '$name' was requested but not found",TYPE_SPECIAL);
+    }
   }
   debugSection();
   return $entry;
 }
 
+/*  Get Elapsed Time */
 function getElapsedTime($name) {
   debugSection("getElapsedTime");
   global $timers;
-  
   $elapsed = -1;
   $name = normalizeKey($name);
   $found_key = array_search($name, array_column($timers, 'name'));
@@ -3525,6 +3866,14 @@ function getElapsedTime($name) {
   return $elapsed;
 }
 
+/*  Reset Timer 
+**
+**  The command "unset($timers[$found_key]);" should delete the entry but it does not
+**    array_search will still find it.
+**
+**  As a workaground, the values are zeroed instead.
+**
+*/
 function resetTimer($name) {
   debugSection("resetTimer");
   global $timers;
@@ -3533,6 +3882,7 @@ function resetTimer($name) {
   $name = normalizeKey($name);
   $found_key = array_search($name, array_column($timers, 'name'));
   if ($found_key !== false) {
+    #  unset($timers[$found_key]);
     $timers[$found_key]['name'] = null;
     $timers[$found_key]['type'] = TIME_TYPE_ANY;
     $timers[$found_key]['start'] = 0;
@@ -3541,8 +3891,6 @@ function resetTimer($name) {
     $timers[$found_key]['elapsed'] = -1;
     $timers[$found_key]['elapsed_hr'] = -1;
     $timers[$found_key]['running'] = false;
-    # This doesn't work right.
-    #  unset($timers[$found_key]);
     writeLog("Resetting Timer for '$name' (key: $found_key)",TYPE_SPECIAL);
     $retval = true;
   }
@@ -3550,17 +3898,15 @@ function resetTimer($name) {
   return $retval;
 }
 
-
 /*  Debug Functions */
 function debugDumpStructures() {
+  debugSection("debugDumpStructures");
   global $processed;
   global $internalData;
   global $configuration;
   global $capabilities;
   global $statistics;
-
   $retval = false;
-  
   if (getConfiguration("global","debug")) {
     if (getConfiguration("debug","dump_structures")) {
       $report = "";
@@ -3582,7 +3928,6 @@ function debugDumpStructures() {
       $report .= "[processed]\n";
       $report .= print_r($processed,true);
       $report .= getConfiguration("logging","separator") . "\n";   
-      
       if (getCapability("php","put")) {
         if (@file_put_contents(getConfiguration("debug","dump_file"), $report) === false) {
           $retval = false;
@@ -3595,6 +3940,7 @@ function debugDumpStructures() {
       }
     }
   }
+  debugSection();
 }
 
 /*
@@ -3602,22 +3948,19 @@ function debugDumpStructures() {
 **  addCapability($scope,$capability,$value)
 */
 function determineCapabilities() {
+  debugSection("determineCapabilities");
   $flag_hrtime = false;
-
   $flag_console = false;
   $flag_curl = false;
   $flag_get_contents = false;
   $flag_put_contents = false;
-
   $flag_fileinfo = false;
   $flag_fileinfo_extension = false;
   $flag_mimetype = false;
-  
   $flag_exif = false;
   $flag_gd = false;
   $flag_gmagick = false;
   $flag_imagemagick = false;
-  
   if (php_sapi_name() == "cli") { $flag_console = true; }
   if (extension_loaded("curl")) { if (function_exists('curl_version')) { $flag_curl = true; } }
   if (function_exists('file_get_contents')) { $flag_get_contents = true; }
@@ -3629,9 +3972,8 @@ function determineCapabilities() {
   if (extension_loaded("imagick")) { $flag_imagemagick = true; }
   if (extension_loaded("gmagick")) { $flag_gmagick = true; }
   if ((extension_loaded("exif")) && (extension_loaded("mbstring"))) { if (function_exists('exif_imagetype')) { $flag_exif = true; } }
-
   if ($flag_fileinfo) { if (defined("FILEINFO_EXTENSION")) {  $flag_fileinfo_extension = true; } }
-      
+  addCapability("php","version",phpversion());
   addCapability("php","console",$flag_console);
   addCapability("php","curl",$flag_curl);
   addCapability("php","exif",$flag_exif);
@@ -3644,22 +3986,24 @@ function determineCapabilities() {
   addCapability("php","imagemagick",$flag_imagemagick);
   addCapability("php","gmagick",$flag_gmagick);
   addCapability("php","hrtime",$flag_hrtime);
-  
   addCapability("os","name",php_uname('s'));
   addCapability("os","release",php_uname('r'));
   addCapability("os","version",php_uname('v'));
   addCapability("os","machine",php_uname('m'));
-  
+  if (defined("DIRECTORY_SEPARATOR")) { addCapability("os","directory_separator",DIRECTORY_SEPARATOR); }
   if (strtolower(substr(getCapability("os","name"), 0, 3)) === 'win') {
     addCapability("os","case_sensitive",false);
-    addCapability("os","directory_separator","\\");
+    if (!defined("DIRECTORY_SEPARATOR ")) { addCapability("os","directory_separator","\\"); }
   } else {
     addCapability("os","case_sensitive",true);
-    addCapability("os","directory_separator","/");
+    if (!defined("DIRECTORY_SEPARATOR ")) { addCapability("os","directory_separator","/"); }
   }
+  debugSection();
 }
 
+/*  Show Capabilities */
 function showCapabilities($level = TYPE_VERBOSE) {
+  debugSection("showCapabilities");
   writeLog("Capabilities:",TYPE_VERBOSE);
   writeLog("* Extension EXIF Enabled: " . showBoolean(getCapability("php","exif")),TYPE_VERBOSE);
   writeLog("* Extension FileInfo Enabled: " . showBoolean(getCapability("php","fileinfo")),TYPE_VERBOSE);
@@ -3671,6 +4015,7 @@ function showCapabilities($level = TYPE_VERBOSE) {
   writeLog("* Function file_put_contents Available: " . showBoolean(getCapability("php","put")),TYPE_VERBOSE);
   writeLog("* Function hrtime Available: " . showBoolean(getCapability("php","hrtime")),TYPE_VERBOSE);
   writeLog("* Function mime_content_type Available: " . showBoolean(getCapability("php","mimetype")),TYPE_VERBOSE);
+  debugSection();
 }
  
 /*  Validate Configuration */
@@ -3752,6 +4097,10 @@ function validateConfiguration() {
       setConfiguration("curl","enabled",false);
     }
   }
+  
+  # TO DO:
+  #   if saving icons, fully validate by attempting to write a test file to the save path.
+  
   debugSection();
 }
 
