@@ -7,15 +7,7 @@ should have a define to try to read get-fav.ini in current folder (overridden wi
 should be able to specify a API path like config (or reference it in the config file)
 should probably add iconhorse to the default list
 
-this should be used with the exif path:
-  image_type_to_mime_type
-  
-  $content_type = image_type_to_mime_type(exif image type)
-  
-file info stuff:
-  
 
-  FILEINFO_EXTENSION (PHP 7.2.0+)
 
 # getimagesize should only be done with a *valid image*
 # list($width, $height, $type, $attr) = getimagesize("img/flag.jpg");  
@@ -26,6 +18,10 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  API: Updated favicongrabber's built-in definition
+  API: Added iconforce to built-in definition
+  Added more to the capabilities structure
+  If exif is used and content-type will be looked up using the image_type_to_mime_type function
   Capability checking is more thorough and accurate.  ("exif" requires "mbstring" etc)
   (In Progress) Preparing to make alerations to program flow, see CHANGES section below.
   Added HTTP Code parser (lookupHTTPResponse), returns an array:
@@ -78,6 +74,13 @@ NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
 TO DO:
 -------------------------------------
+  Add config for temporary image file use
+      script will need read/write permissions
+  Add functions to get image width/height (and verify type)
+      Resource paths:
+        raw data, file, url
+      Data paths:
+        exif, gd, imagemagick, gmagick and a fallback
   Add option to show running configuration and exit
   Add option to load API ini from a pathname
   Add option to actually check icon on disk's size/type? (post save)
@@ -222,7 +225,7 @@ define('ENABLE_WEB_INPUT', false);
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202306032153');
+define('PROGRAM_VERSION', '202306041914');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -238,7 +241,8 @@ define('DEFAULT_OVERWRITE', false);
 define('DEFAULT_ENABLE_BLOCKLIST', true);
 define('DEFAULT_TENACIOUS', false); 
 define('DEFAULT_REMOVE_TLD', false);
-define('DEFAULT_ALLOW_OCTET_STREAM', true);
+define('DEFAULT_ALLOW_OCTET_STREAM', false);
+define('DEFAULT_ALLOW_OCTET_STREAM_IF_FILEINFO_OR_MIMETYPE', true);
 define('DEFAULT_USE_LOAD_BUFFERING', true);
 define('DEFAULT_LOG_PATHNAME', "get-fav.log");
 define('DEFAULT_LOG_FILE_ENABLED', false);
@@ -352,6 +356,7 @@ setItem("program_name",PROGRAM_NAME);
 setItem("program_version",PROGRAM_VERSION);
 setItem("banner",getItem("project_name") . " (" .getItem("program_name") . ") v" . getItem("program_version"));
 
+/*  Populate $capabilities structure to determine what functions can be used */
 determineCapabilities();
 
 if (file_exists(DEFAULT_API_DATABASE)) {
@@ -366,8 +371,9 @@ if (file_exists(DEFAULT_API_DATABASE)) {
 
 if (empty($apiList)) {
   addAPI("faviconkit","https://api.faviconkit.com/<DOMAIN>/<SIZE>",false,DEFAULT_ENABLE_APIS);
-  addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons","0","src"));
+  addAPI("favicongrabber","http://favicongrabber.com/api/grab/<DOMAIN>",true,DEFAULT_ENABLE_APIS,array("icons" => "icons","link" => "src","sizeWxH" => "sizes","mime" => "type","error" => "error"));
   addAPI("google","http://www.google.com/s2/favicons?domain=<DOMAIN>",false,DEFAULT_ENABLE_APIS);
+  addAPI("iconhorse","https://icon.horse/icon/<DOMAIN>",false,DEFAULT_ENABLE_APIS);
   setConfiguration("global","api_list","internal");
 }
 
@@ -379,8 +385,13 @@ $display_API_list = getAPIList();
 ** setConfiguration($scope,$option,$value,$default,$type)
 */
 
+if (getCapability("php","fileinfo") || getCapability("php","mimetype")) {
+  setConfiguration("global","allow_octet_stream",DEFAULT_ALLOW_OCTET_STREAM_IF_FILEINFO_OR_MIMETYPE);
+} else {
+  setConfiguration("global","allow_octet_stream",DEFAULT_ALLOW_OCTET_STREAM);
+}
+
 setConfiguration("global","debug",false);
-setConfiguration("global","allow_octet_stream",DEFAULT_ALLOW_OCTET_STREAM);
 setConfiguration("global","api",DEFAULT_ENABLE_APIS);
 setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
 setConfiguration("global","icon_size",DEFAULT_SIZE);
@@ -1447,6 +1458,38 @@ function getMIMEType($data) {
   return $content_type;
 }
 
+/*  Get MIME Type from URL */
+function getMIMETypeFromURL($url) {
+  $content_type = null;
+  $content = null;
+  if (!is_null($url)) {
+    if (is_string($url)) {
+      if (!getCapability("php","get")) {
+        $fh = fopen($url, 'r', false);
+        if ($fh) {
+          $content = '';
+          while (!feof($fh)) {
+            $content .= fread($fh, BUFFER_SIZE);
+          }
+          fclose($fh);
+        } else {
+          writeLog("Failed to open '$url'",TYPE_TRACE);
+        }
+      } else {
+        $content = @file_get_contents($url, false);
+      }
+      if (!is_null($content)) {
+        if (is_null($content_type)) {
+          if (getCapability("php","fileinfo")) {
+            $content_type = getMIMEType($content);
+          }
+        }
+      }         
+    }
+  }
+  return $content_type;  
+}
+
 /*  Get MIME Type from a File */
 function getMIMETypeFromFile($pathname) {
   $content_type = null;
@@ -1455,7 +1498,7 @@ function getMIMETypeFromFile($pathname) {
       if (is_null($content_type)) {
         if (getCapability("php","fileinfo")) {
           $finfo = new finfo(FILEINFO_MIME_TYPE);
-          $content_type = $finfo->file($pathname);    
+          $content_type = $finfo->file($pathname);
         }
       }      
       if (is_null($content_type)) {
@@ -1463,6 +1506,16 @@ function getMIMETypeFromFile($pathname) {
           $content_type = mime_content_type($pathname);
         }
       }    
+    }
+  }
+  return $content_type;
+}
+
+function getMIMETypeFromBinary($buffer) {
+  $content_type = null;
+  if (!is_null($buffer)) {
+    if (is_string($buffer))
+    {
     }
   }
   return $content_type;
@@ -1614,40 +1667,6 @@ function getIconExtension($url, $noFallback = false) {
         }
         if (!is_null($content)) {
           if (is_null($content_type)) {
-            if (getCapability("php","exif")) {
-              $phpUA = ini_get("user_agent");
-              $timeout = ini_get("default_socket_timeout");
-              $method = "exif";
-              writeLog("url='$url', method=$exif, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
-              $filetype = @exif_imagetype($url);
-              if (!is_null($filetype)) {
-                switch ($filetype) {
-                  case IMAGETYPE_GIF:
-                    $content_type = "image/gif";
-                    break;
-                  case IMAGETYPE_JPEG:
-                    $content_type = "image/jpeg";
-                    break;
-                  case IMAGETYPE_PNG:
-                    $content_type = "image/png";
-                    break;
-                  case IMAGETYPE_ICO:
-                    $content_type = "image/x-icon";
-                    break;
-                  case IMAGETYPE_WEBP:
-                    $content_type = "image/webp";
-                    break;
-                  case IMAGETYPE_BMP:
-                    $content_type = "image/bmp";
-                    break;
-                  default:
-                    $content_type = null;
-                    $file_extension = null;
-                }
-                if (!is_null($content_type)) {  $file_extension = lookupExtensionByMIME($content_type); }
-              }
-            }
-          } else {
             $method = "mimetype";
             writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
             switch ($content_type) {
@@ -1672,6 +1691,46 @@ function getIconExtension($url, $noFallback = false) {
                 } else {
                   $is_valid = true;
                 }
+            }
+          }
+          if (is_null($content_type)) {
+            if (getCapability("php","exif")) {
+              $phpUA = ini_get("user_agent");
+              $timeout = ini_get("default_socket_timeout");
+              $method = "exif";
+              writeLog("WARNING: exif_imagetype is sometimes refused access to an icon.",TYPE_TRACE);
+              writeLog("url='$url', method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+              $filetype = @exif_imagetype($url);
+              if (!is_null($filetype)) {
+                if (function_exists("image_type_to_mime_type")) {
+                  $content_type = image_type_to_mime_type($filetype);
+                } else {
+                  switch ($filetype) {
+                    case IMAGETYPE_GIF:
+                      $content_type = "image/gif";
+                      break;
+                    case IMAGETYPE_JPEG:
+                      $content_type = "image/jpeg";
+                      break;
+                    case IMAGETYPE_PNG:
+                      $content_type = "image/png";
+                      break;
+                    case IMAGETYPE_ICO:
+                      $content_type = "image/x-icon";
+                      break;
+                    case IMAGETYPE_WEBP:
+                      $content_type = "image/webp";
+                      break;
+                    case IMAGETYPE_BMP:
+                      $content_type = "image/bmp";
+                      break;
+                    default:
+                      $content_type = null;
+                      $file_extension = null;
+                  }
+                }
+                if (!is_null($content_type)) {  $file_extension = lookupExtensionByMIME($content_type); }
+              }
             }
           }
         }
@@ -3469,14 +3528,22 @@ function debugDumpStructures() {
 **  addCapability($scope,$capability,$value)
 */
 function determineCapabilities() {
+  $flag_hrtime = false;
+
   $flag_console = false;
   $flag_curl = false;
-  $flag_exif = false;
   $flag_get_contents = false;
   $flag_put_contents = false;
+
   $flag_fileinfo = false;
+  $flag_fileinfo_extension = false;
   $flag_mimetype = false;
-  $flag_hrtime = false;
+  
+  $flag_exif = false;
+  $flag_gd = false;
+  $flag_gmagick = false;
+  $flag_imagemagick = false;
+  
   
   if (php_sapi_name() == "cli") { $flag_console = true; }
   if (extension_loaded("curl")) { if (function_exists('curl_version')) { $flag_curl = true; } }
@@ -3485,7 +3552,12 @@ function determineCapabilities() {
   if (function_exists('mime_content_type')) { $flag_mimetype = true; }
   if (function_exists('hrtime')) { $flag_hrtime = true; }
   if (extension_loaded("fileinfo")) { if (function_exists('finfo_open')) { $flag_fileinfo = true; } }
+  if (extension_loaded("gd")) { if (function_exists('getimagesize')) { $flag_gd = true; } }
+  if (extension_loaded("imagick")) { $flag_imagemagick = true; }
+  if (extension_loaded("gmagick")) { $flag_gmagick = true; }
   if ((extension_loaded("exif")) && (extension_loaded("mbstring"))) { if (function_exists('exif_imagetype')) { $flag_exif = true; } }
+
+  if ($flag_fileinfo) { if (defined("FILEINFO_EXTENSION")) {  $flag_fileinfo_extension = true; } }
       
   addCapability("php","console",$flag_console);
   addCapability("php","curl",$flag_curl);
@@ -3493,8 +3565,26 @@ function determineCapabilities() {
   addCapability("php","get",$flag_get_contents);
   addCapability("php","put",$flag_put_contents);
   addCapability("php","fileinfo",$flag_fileinfo);
+  addCapability("php","fileinfo_extension",$flag_fileinfo_extension);
   addCapability("php","mimetype",$flag_mimetype);
+  addCapability("php","gd",$flag_gd);
+  addCapability("php","imagemagick",$flag_imagemagick);
+  addCapability("php","gmagick",$flag_gmagick);
   addCapability("php","hrtime",$flag_hrtime);
+  
+  addCapability("os","name",php_uname('s'));
+  addCapability("os","release",php_uname('r'));
+  addCapability("os","version",php_uname('v'));
+  addCapability("os","machine",php_uname('m'));
+  
+  if (strtolower(substr(getCapability("os","name"), 0, 3)) === 'win') {
+    addCapability("os","case_sensitive",false);
+    addCapability("os","directory_separator","\\");
+  } else {
+    addCapability("os","case_sensitive",true);
+    addCapability("os","directory_separator","/");
+  }
+    
 }
  
 /*  Validate Configuration */
