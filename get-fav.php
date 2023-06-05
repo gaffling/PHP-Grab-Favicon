@@ -18,6 +18,8 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Loading of 'same folder' API and config file can be controlled in the special runtime defines section.
+    They can still be overridden by a command switch
   API: Updated favicongrabber's built-in definition
   API: Added iconforce to built-in definition
   Added more to the capabilities structure
@@ -214,25 +216,31 @@ Audrey Roy Greenfeld has written an excellent guide to favicons for both website
  
 $time_start = microtime(true);
 
-/*
+/*  RUNTIME OPTIONS 
+**
 **  If you wish get-fav.php to be able to process commands issued via a query string or
 **  form submission on a webserver, change the setting below to true.
 */
 define('ENABLE_WEB_INPUT', false);
+define('ENABLE_SAME_FOLDER_API_INI',true);
+define('ENABLE_SAME_FOLDER_INI',true);
 
 /*
 **  Project
 */
 define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
-define('PROGRAM_VERSION', '202306041914');
+define('PROGRAM_VERSION', '202306042131');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
+
+
 
 /*  Debug */
 define('DEFAULT_DEBUG_DUMP_FILE', "get-fav-debug.log");
 define('DEFAULT_DEBUG_DUMP_STRUCTURES', true);
 
 /*  Defaults */
+
 define('DEFAULT_ENABLE_APIS', true);
 define('DEFAULT_USE_CURL', true);
 define('DEFAULT_STORE', true);
@@ -262,6 +270,7 @@ define('DEFAULT_HTTP_TIMEOUT', 60);
 define('DEFAULT_HTTP_CONNECT_TIMEOUT', 30);
 define('DEFAULT_DNS_TIMEOUT', 120);
 define('DEFAULT_API_DATABASE', "get-fav-api.ini");
+define('DEFAULT_INI_FILE', "get-fav.ini");
 define('DEFAULT_USER_AGENT', "FaviconBot/1.0/");
 define('DEFAULT_VALID_EXTENSIONS', "gif,webp,png,ico,bmp,svg,jpg");
 define('DEFAULT_PROTOCOL_IS_HTTPS', true);
@@ -355,13 +364,29 @@ setItem("project_name",PROJECT_NAME);
 setItem("program_name",PROGRAM_NAME);
 setItem("program_version",PROGRAM_VERSION);
 setItem("banner",getItem("project_name") . " (" .getItem("program_name") . ") v" . getItem("program_version"));
+setItem("configuration","defaults");
 
 /*  Populate $capabilities structure to determine what functions can be used */
 determineCapabilities();
 
-if (file_exists(DEFAULT_API_DATABASE)) {
-  $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
-  setConfiguration("global","api_list",DEFAULT_API_DATABASE);
+/*  Special Config Load Options */
+if (ENABLE_SAME_FOLDER_API_INI) {
+  if (file_exists(DEFAULT_API_DATABASE)) {
+    $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
+    setConfiguration("global","api_list",DEFAULT_API_DATABASE);
+  }
+}
+
+if (ENABLE_SAME_FOLDER_INI) {
+  if (file_exists(DEFAULT_INI_FILE)) {
+    $configuration_from_file = parse_ini_file(DEFAULT_INI_FILE,true,INI_SCANNER_RAW);
+    if (isset($configuration_from_file)) {
+      $configuration = array_replace_recursive($configuration, $configuration_from_file);
+      setItem("configuration",DEFAULT_INI_FILE);
+      unset($configuration_from_file);
+      validateConfiguration();
+    }
+  }
 }
 
 /*
@@ -1645,6 +1670,11 @@ function getIconExtension($url, $noFallback = false) {
           $RequestData = lookupHTTPResponse($http_code);
           if ($RequestData['ok']) {
             $content_type = getLastLoadResult("content_type");
+            if (is_null($content_type)) {
+              writeLog("url='$url', last load contains content_type: null",TYPE_TRACE);
+            } else {
+              writeLog("url='$url', last load contains content_type: $content_type)",TYPE_TRACE);
+            }
           } else {
             writeLog("url='$url', last load result returned an error=" . $RequestData['code'] . " (" . $RequestData['description'] . ")",TYPE_TRACE);
             if (is_null($http_code)) {
@@ -1667,6 +1697,18 @@ function getIconExtension($url, $noFallback = false) {
         }
         if (!is_null($content)) {
           if (is_null($content_type)) {
+            $method = "getMIMEType";
+            $content_type = getMIMEType($content);
+            writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+          }
+          if (!is_null($content_type)) {
+            if ($content_type == "application/octet-stream") {
+              $method = "getMIMEType";
+              $content_type = getMIMEType($content);
+              writeLog("url='$url', method=$method, content-type=$content_type; (was application/octet-stream)",TYPE_TRACE);
+            }
+          }
+          if (!is_null($content_type)) {
             $method = "mimetype";
             writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
             switch ($content_type) {
