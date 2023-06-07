@@ -8,7 +8,6 @@ should be able to specify a API path like config (or reference it in the config 
 should probably add iconhorse to the default list
 
 
-
 # getimagesize should only be done with a *valid image*
 # list($width, $height, $type, $attr) = getimagesize("img/flag.jpg");  
 
@@ -18,6 +17,9 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Refined HTTP Response Parsing
+  Added more parameter checking
+  Added major/minor to version
   Added --apiconfigfile=PATHNAME to load API Definitions
   Loading of 'same folder' API and config file can be controlled in the special runtime defines section.  Default is OFF
     They can still be overridden by a command switch
@@ -270,7 +272,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306051212');
+define('PROGRAM_BUILD', '202306062230');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -356,6 +358,14 @@ define('HTML_STYLE_TT', "<pre><MESSAGE></pre>");
 define('GOOGLE_DEFAULT_ICON_MD5', '3ca64f83fdcf25135d87e08af65e68c9');
 define('URL_PATH_FAVICON', "favicon.ico");
 
+/*  HTTP Response Types */
+define('HTTP_RESPONSE_TYPE_NONE', 0);
+define('HTTP_RESPONSE_TYPE_INFORMATIONAL', 1);
+define('HTTP_RESPONSE_TYPE_SUCCESS', 2);
+define('HTTP_RESPONSE_TYPE_REDIRECT', 3);
+define('HTTP_RESPONSE_TYPE_CLIENT_ERROR', 4);
+define('HTTP_RESPONSE_TYPE_SERVER_ERROR', 5);
+
 /*  Timer Types */
 define('TIME_TYPE_ANY', 0);
 define('TIME_TYPE_STANDARD', 1);
@@ -376,6 +386,12 @@ define('CONFIG_TYPE_SWITCH', 5);
 define('CONFIG_TYPE_SWITCH_PAIR', 6);
 define('CONFIG_TYPE_NUMERIC', 7);
 define('CONFIG_TYPE_NUMERIC_SIGNED', 8);
+
+/*  PHP INI Entries */
+define('PHP_OPTION_ALLOW_URL_FOPEN', "allow_url_fopen");
+define('PHP_OPTION_MAX_EXECUTION_TIME', "max_execution_time");
+define('PHP_OPTION_USER_AGENT', "user_agent");
+define('PHP_OPTION_DEFAULT_SOCKET_TIMEOUT', "default_socket_timeout");
 
 /*
 **  Initialize Arrays and Flags
@@ -905,7 +921,7 @@ function grap_favicon($url) {
 
   if (!$consoleMode) {
     // avoid script runtime timeout
-    $max_execution_time = ini_get("max_execution_time");
+    $max_execution_time = ini_get(PHP_OPTION_MAX_EXECUTION_TIME);
     set_time_limit(0); // 0 = no timelimit
   }
   
@@ -1361,14 +1377,140 @@ function grap_favicon($url) {
 
 } // END MAIN Function
 
+/*  Lookup HTTP Code */
+/*  Some of these are unofficial but get-fav may run into them */
+function lookupHTTPResponse($code = null) {
+  $status_ok = false;
+  $description = null;
+  $http_code = "(null)";
+  $response_type = HTTP_RESPONSE_TYPE_NONE;
+
+  if (!is_null($code)) {
+    if (is_numeric($code)) {
+      if ($code >= RANGE_HTTP_RESPONSE_MINIMUM && $code <= RANGE_HTTP_RESPONSE_MAXIMUM) {
+        $http_code = $code;
+        
+        if ($code >= 100 && $code < 200) { $response_type = HTTP_RESPONSE_TYPE_INFORMATIONAL; }
+        if ($code >= 200 && $code < 300) { $response_type = HTTP_RESPONSE_TYPE_SUCCESS; }
+        if ($code >= 300 && $code < 400) { $response_type = HTTP_RESPONSE_TYPE_REDIRECT; }
+        if ($code >= 400 && $code < 500) { $response_type = HTTP_RESPONSE_TYPE_CLIENT_ERROR; }
+        if ($code >= 500 && $code < 600) { $response_type = HTTP_RESPONSE_TYPE_SERVER_ERROR; }
+        
+        if ($response_type == HTTP_RESPONSE_TYPE_INFORMATIONAL) { $status_ok = true; }
+        if ($response_type == HTTP_RESPONSE_TYPE_SUCCESS) { $status_ok = true; }
+        if ($response_type == HTTP_RESPONSE_TYPE_REDIRECT) { $status_ok = true; }
+
+        switch ($code) {
+          case 100: $description = "Continue"; break;
+          case 101: $description = "Switching Protocols"; break;
+          case 102: $description = "Processing (WebDAV)"; break;
+          case 103: $description = "Early Hints"; break;
+          case 200: $description = "OK"; break;
+          case 201: $description = "Created"; break;
+          case 202: $description = "Accepted"; break;
+          case 203: $description = "Non-Authoritative Information"; break;
+          case 204: $description = "No Content"; break;
+          case 205: $description = "Reset Content"; break;
+          case 206: $description = "Partial Content"; break;
+          case 207: $description = "Multi-Status (WebDAV)"; break;
+          case 208: $description = "Already Reported (WebDAV)"; break;
+          case 226: $description = "IM Used (HTTP Delta encoding)"; break;
+          case 300: $description = "Multiple Choices"; break;
+          case 301: $description = "Moved Permanently"; break;
+          case 302: $description = "Found"; break;
+          case 303: $description = "See Other"; break;
+          case 304: $description = "Not Modified"; break;
+          case 305: $description = "Use Proxy"; break;
+          case 306: $description = "Switch Proxy"; break;
+          case 307: $description = "Temporary Redirect"; break;
+          case 308: $description = "Permanent Redirect"; break;
+          case 400: $description = "Bad Request"; break;
+          case 401: $description = "Unauthorized"; break;
+          case 402: $description = "Payment Required"; break;
+          case 403: $description = "Forbidden"; break;
+          case 404: $description = "Not Found"; break;
+          case 405: $description = "Method Not Allowed"; break;
+          case 406: $description = "Not Acceptable"; break;
+          case 407: $description = "Proxy Authentication Required"; break;
+          case 408: $description = "Request Time-out"; break;
+          case 409: $description = "Conflict"; break;
+          case 410: $description = "Gone"; break;
+          case 411: $description = "Length Required"; break;
+          case 412: $description = "Precondition Failed"; break;
+          case 413: $description = "Payload Too Large"; break;
+          case 414: $description = "URI Too Long"; break;
+          case 415: $description = "Unsupported Media Type"; break;
+          case 416: $description = "Range Not Satisfiable"; break;
+          case 417: $description = "Expectation Failed"; break;
+          case 418: $description = "I'm a teapot"; break;
+          case 421: $description = "Misdirected Request"; break;
+          case 422: $description = "Unprocessable Content (WebDAV)"; break;
+          case 423: $description = "Locked (WebDAV)"; break;
+          case 424: $description = "Failed Dependency (WebDAV)"; break;
+          case 425: $description = "Too Early"; break;
+          case 426: $description = "Upgrade Required"; break;
+          case 428: $description = "Precondition Required"; break;
+          case 429: $description = "Too Many Requests"; break;
+          case 431: $description = "Request Header Fields Too Large"; break;
+          case 444: $description = "No Response"; break;
+          case 451: $description = "Unavailable For Legal Reasons"; break;
+          case 500: $description = "Internal Server Error"; break;
+          case 501: $description = "Not Implemented"; break;
+          case 502: $description = "Bad Gateway"; break;
+          case 503: $description = "Service Unavailable"; break;
+          case 504: $description = "Gateway Timeout"; break;
+          case 505: $description = "HTTP Version Not Supported"; break;
+          case 506: $description = "Variant Also Negotiates"; break;
+          case 507: $description = "Insufficient Storage (WebDAV)"; break;
+          case 508: $description = "Loop Detected (WebDAV)"; break;
+          case 509: $description = "Bandwidth Limit Exceeded"; break;
+          case 510: $description = "Not Extended"; break;
+          case 511: $description = "Network Authentication Required"; break;
+          case 521: $description = "Web Server Is Down"; break;
+          case 522: $description = "Connection Timed Out"; break;
+          case 523: $description = "Origin Is Unreachable"; break;
+          default:
+            $description = "Unknown";
+        }
+      } else {
+        $description = "Invalid Response; Out of Range ($code)";
+        $http_code = "(out of range)";
+      }
+    } else {
+      $description = "Response Not Numeric";
+      $http_code = "(invalid)";
+    }
+  } else {
+    $description = "Response Is Null";
+    $http_code = "(null)";
+  }
+  $retval = array(
+    "ok" => $status_ok,
+    "description" => $description,
+    "code" => $http_code,
+    "type" => $response_type,
+  );
+  return $retval;
+}
+
+/*  Adds the favicon path to the URL */
+function addFavIconToURL($url) {
+  if(!strrev($url)[0] === '/') { $url .= "/"; }
+  $url .= URL_PATH_FAVICON;
+  return $url;
+}
 
 /*  Load URL */
 function load($url) {
   debugSection("load");
   $content = null;
   if (!is_string($url)) {
-    writeLog("ERROR: URL is type (" . gettype($url) . "), var_dump to stdout follows",TYPE_TRACE);
-    var_dump($url);
+    if (debugMode()) {
+      writeLog("URL requested for load is type (" . gettype($url) . ") instead of string, var_dump to stdout follows",TYPE_ERROR);
+      var_dump($url);
+    } else {
+      writeLog("URL requested for load is type (" . gettype($url) . ") instead of string",TYPE_ERROR);
+    }
   } else {
     $content_hash = null;
     $content_type = null;
@@ -1404,41 +1546,58 @@ function load($url) {
         $method = "curl";
         writeLog("$method: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),TYPE_TRACE);
         $ch = curl_init($url);
-        if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
-        curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
-        curl_setopt($ch, CURLOPT_TIMEOUT, getConfiguration("http","http_timeout"));
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, getConfiguration("http","http_timeout_connect")); 
-        curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, getConfiguration("http","dns_timeout")); 
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        if (getConfiguration("curl","showprogress")) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
-        $protocol = null;
-        $protocol_id = null;
-        $content = curl_exec($ch);
-        $curl_response = curl_getinfo($ch);
-        $content_type = $curl_response['content_type'];
-        $http_code = $curl_response['http_code'];
-        $curl_url = $curl_response['url'];
-        if (isset($curl_response['scheme'])) { $protocol = $curl_response['scheme']; }
-        if (isset($curl_response['protocol'])) { $protocol_id = $curl_response['protocol']; }
-        if (is_null($protocol)) { $protocol = parse_url($url,PHP_URL_SCHEME); }
-        writeLog("$method: Return Code=$http_code for '$url'",TYPE_TRACE);
-        curl_close($ch);
-        unset($ch);
-        if (is_null($content)) { writeLog("$method: No content received '$url'",TYPE_TRACE); }
-        if ($http_code == 301 || $http_code == 302 || $http_code == 307 || $http_code == 308)  {
-          $redirect++;
-          if ($redirect < getConfiguration("http","maximum_redirects"))
-          {
-            writeLog("$method: Redirecting to '$curl_url' from '$url'",TYPE_TRACE);
-            setGlobal('redirect_count',$redirect);
-            setGlobal('redirect_url',$curl_url);
-            $content = load($curl_url);
-            $flag_skip_loadlastresult = true;
+        if (isset($ch)) {
+          if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
+          curl_setopt($ch, CURLOPT_VERBOSE, getConfiguration("curl","verbose"));
+          curl_setopt($ch, CURLOPT_TIMEOUT, getConfiguration("http","http_timeout"));
+          curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, getConfiguration("http","http_timeout_connect")); 
+          curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, getConfiguration("http","dns_timeout")); 
+          curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+          curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+          curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+          if (getConfiguration("curl","showprogress")) { curl_setopt($ch, CURLOPT_NOPROGRESS, false); }
+          $protocol = null;
+          $protocol_id = null;
+          $content = curl_exec($ch);
+          $curl_response = curl_getinfo($ch);
+          if (!empty($curl_response)) {
+            if (isset($curl_response['content_type'])) { $content_type = $curl_response['content_type']; }
+            if (isset($curl_response['http_code'])) { $http_code = $curl_response['http_code']; }
+            if (isset($curl_response['url'])) { $curl_url = $curl_response['url']; }
+            if (isset($curl_response['scheme'])) { $protocol = $curl_response['scheme']; }
+            if (isset($curl_response['protocol'])) { $protocol_id = $curl_response['protocol']; }
+            if (is_null($protocol)) { $protocol = parse_url($url,PHP_URL_SCHEME); }
+            $RequestData = lookupHTTPResponse($http_code);
+            writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
+            curl_close($ch);
+            unset($ch);
+            if (is_null($content)) { writeLog("$method: No content received '$url'",TYPE_TRACE); }
+            if (is_null($http_code)) {
+              writeLog("$method: No HTTP return code received for '$url'",TYPE_TRACE);
+            } else {
+              if ($RequestData['type'] == HTTP_RESPONSE_TYPE_REDIRECT) {
+                if (!is_null($curl_url)) {
+                  $redirect++;
+                  if ($redirect < getConfiguration("http","maximum_redirects"))
+                  {
+                    writeLog("$method: Redirecting to '$curl_url' from '$url' (# $redirect)",TYPE_TRACE);
+                    setGlobal('redirect_count',$redirect);
+                    setGlobal('redirect_url',$curl_url);
+                    $content = load($curl_url);
+                    $flag_skip_loadlastresult = true;
+                  } else {
+                    writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
+                  }
+                } else {
+                  writeLog("$method: Got redirect response from server but no URL provided",TYPE_TRACE);
+                }
+              }
+            }
           } else {
-            writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
+            writeLog("$method: No response from cURL",TYPE_TRACE);
           }
+        } else {
+          writeLog("$method: Error initializing cURL",TYPE_TRACE);
         }
       } else {
         $method = "stream";
@@ -1451,33 +1610,41 @@ function load($url) {
         $context = stream_context_create($context_options);
         if (!getCapability("php","get")) {
           writeLog("$method: attempting to load '$url'",TYPE_TRACE);
-          $fh = fopen($url, 'r', false, $context);
-          if ($fh) {
-            $content = '';
-            while (!feof($fh)) {
-              $content .= fread($fh, BUFFER_SIZE);
+          if (ini_get(PHP_OPTION_ALLOW_URL_FOPEN)) {
+            $fh = fopen($url, 'r', false, $context);
+            if ($fh) {
+              $content = "";
+              while (!feof($fh)) {
+                $content .= fread($fh, BUFFER_SIZE);
+              }
+              fclose($fh);
+            } else {
+              writeLog("Failed to open '$url'",TYPE_TRACE);
             }
-            fclose($fh);
           } else {
-            writeLog("Failed to open '$url'",TYPE_TRACE);
+            writeLog("$method: attempting to load '$url' but PHP option '" . PHP_OPTION_ALLOW_URL_FOPEN . "' is set to false",TYPE_ERROR);
           }
         } else {
           $method = "stream/file_get_contents";
           writeLog("$method: attempting to load '$url'",TYPE_TRACE);
           $content = @file_get_contents($url, null, $context);
-          if (is_null($content)) {
-            writeLog("$method: No content received '$url'",TYPE_TRACE);
-          } else {
-            if (!is_null($http_response_header)) {
-              $headers = implode("\n", $http_response_header);
-              if (preg_match_all("/^HTTP.*\s+([0-9]+)/mi", $headers, $matches )) {
-                $http_code = end($matches[1]);
-              }
-            }
-            $RequestData = lookupHTTPResponse($http_code);
-            writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
+        }
+        if (is_null($content)) {
+          writeLog("$method: No content received '$url'",TYPE_TRACE);
+        }
+        if (!is_null($http_response_header)) {
+          $headers = implode("\n", $http_response_header);
+          # TO DO:
+          # this needs better coding
+          #   are redirects supported?
+          #     what response header has the url to try?
+          /* NOTE: $http_response_header is a special variable (array) that PHP provides */
+          if (preg_match_all("/^HTTP.*\s+([0-9]+)/mi", $headers, $matches )) {
+            $http_code = end($matches[1]);
           }
         }
+        $RequestData = lookupHTTPResponse($http_code);
+        writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
       }
       $content_type = getMIMEType($content);
       if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
@@ -1494,32 +1661,44 @@ function loadLocalFile($pathname) {
   debugSection("loadLocalFile");
   $content = null;
   $content_type = null;
-  if (is_null($pathname)) {
-    writeLog("No pathname given",TYPE_TRACE);
-  } else {
-    if (file_exists($pathname)) {
-      if (!getCapability("php","get")) {
-        $fh = fopen($pathname, 'r', false);
-        if ($fh) {
-          $content = '';
-          while (!feof($fh)) {
-            $content .= fread($fh, BUFFER_SIZE); // Because filesize() will not work on URLS?
-          }
-          fclose($fh);
-        } else {
-          writeLog("Failed to open '$pathname'",TYPE_TRACE);
-        }
-      } else {
-        $content = @file_get_contents($pathname, false);
-      }
-      if (is_null($content)) {
-        writeLog("No content for '$pathname'",TYPE_TRACE);
-      } else {
-        $content_type = getMIMEType($content);
-      }
-      lastLoadResult($pathname,"file",$content_type,0,"file",0,$content);
+  $protocol = null;
+  if (!is_string($pathname)) {
+    if (debugMode()) {
+      writeLog("Pathname requested for load is type (" . gettype($pathname) . ") instead of string, var_dump to stdout follows",TYPE_ERROR);
+      var_dump($pathname);
     } else {
-      writeLog("'$pathname' does not exist",TYPE_TRACE);
+      writeLog("Pathname requested for load is type (" . gettype($pathname) . ") instead of string",TYPE_ERROR);
+    }
+  } else {
+    $protocol = parse_url($pathname,PHP_URL_SCHEME);
+    if (!is_null($protocol)) { writeLog("Possible URL Request ($protocol)",TYPE_TRACE); }
+    if (is_null($pathname)) {
+      writeLog("No pathname given",TYPE_TRACE);
+    } else {
+      if (file_exists($pathname)) {
+        if (!getCapability("php","get")) {
+          $fh = fopen($pathname, 'r', false);
+          if ($fh) {
+            $content = "";
+            while (!feof($fh)) {
+              $content .= fread($fh, BUFFER_SIZE);
+            }
+            fclose($fh);
+          } else {
+            writeLog("Failed to open '$pathname'",TYPE_TRACE);
+          }
+        } else {
+          $content = @file_get_contents($pathname, false);
+        }
+        if (is_null($content)) {
+          writeLog("No content for '$pathname'",TYPE_TRACE);
+        } else {
+          $content_type = getMIMEType($content);
+        }
+        lastLoadResult($pathname,"file",$content_type,0,"file",0,$content);
+      } else {
+        writeLog("'$pathname' does not exist",TYPE_TRACE);
+      }
     }
   }
   debugSection();
@@ -1794,8 +1973,8 @@ function getIconExtension($url, $noFallback = false) {
           }
           if (is_null($content_type)) {
             if (getCapability("php","exif")) {
-              $phpUA = ini_get("user_agent");
-              $timeout = ini_get("default_socket_timeout");
+              $phpUA = ini_get(PHP_OPTION_USER_AGENT);
+              $timeout = ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT);
               $method = "exif";
               writeLog("WARNING: exif_imagetype is sometimes refused access to an icon.",TYPE_TRACE);
               writeLog("url='$url', method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
@@ -1916,122 +2095,6 @@ function getValidTypes() {
   return $retval;
 }
 
-/*  Lookup HTTP Code */
-/*  Some of these are unofficial but get-fav may run into them */
-function lookupHTTPResponse($code = null) {
-  $status_ok = false;
-  $description = null;
-  $http_code = "(null)";
-  if (!is_null($code)) {
-    if (is_numeric($code)) {
-      if ($code >= RANGE_HTTP_RESPONSE_MINIMUM && $code <= RANGE_HTTP_RESPONSE_MAXIMUM) {
-        $http_code = $code;
-        if ($code >= 100 && $code < 400) {
-          $status_ok = true;
-        }
-        switch ($code) {
-          case 100: $description = "Continue"; break;
-          case 101: $description = "Switching Protocols"; break;
-          case 102: $description = "Processing (WebDAV)"; break;
-          case 103: $description = "Early Hints"; break;
-          case 200: $description = "OK"; break;
-          case 201: $description = "Created"; break;
-          case 202: $description = "Accepted"; break;
-          case 203: $description = "Non-Authoritative Information"; break;
-          case 204: $description = "No Content"; break;
-          case 205: $description = "Reset Content"; break;
-          case 206: $description = "Partial Content"; break;
-          case 207: $description = "Multi-Status (WebDAV)"; break;
-          case 208: $description = "Already Reported (WebDAV)"; break;
-          case 226: $description = "IM Used (HTTP Delta encoding)"; break;
-          case 300: $description = "Multiple Choices"; break;
-          case 301: $description = "Moved Permanently"; break;
-          case 302: $description = "Found"; break;
-          case 303: $description = "See Other"; break;
-          case 304: $description = "Not Modified"; break;
-          case 305: $description = "Use Proxy"; break;
-          case 306: $description = "Switch Proxy"; break;
-          case 307: $description = "Temporary Redirect"; break;
-          case 308: $description = "Permanent Redirect"; break;
-          case 400: $description = "Bad Request"; break;
-          case 401: $description = "Unauthorized"; break;
-          case 402: $description = "Payment Required"; break;
-          case 403: $description = "Forbidden"; break;
-          case 404: $description = "Not Found"; break;
-          case 405: $description = "Method Not Allowed"; break;
-          case 406: $description = "Not Acceptable"; break;
-          case 407: $description = "Proxy Authentication Required"; break;
-          case 408: $description = "Request Time-out"; break;
-          case 409: $description = "Conflict"; break;
-          case 410: $description = "Gone"; break;
-          case 411: $description = "Length Required"; break;
-          case 412: $description = "Precondition Failed"; break;
-          case 413: $description = "Payload Too Large"; break;
-          case 414: $description = "URI Too Long"; break;
-          case 415: $description = "Unsupported Media Type"; break;
-          case 416: $description = "Range Not Satisfiable"; break;
-          case 417: $description = "Expectation Failed"; break;
-          case 418: $description = "I'm a teapot"; break;
-          case 421: $description = "Misdirected Request"; break;
-          case 422: $description = "Unprocessable Content (WebDAV)"; break;
-          case 423: $description = "Locked (WebDAV)"; break;
-          case 424: $description = "Failed Dependency (WebDAV)"; break;
-          case 425: $description = "Too Early"; break;
-          case 426: $description = "Upgrade Required"; break;
-          case 428: $description = "Precondition Required"; break;
-          case 429: $description = "Too Many Requests"; break;
-          case 431: $description = "Request Header Fields Too Large"; break;
-          case 444: $description = "No Response"; break;
-          case 451: $description = "Unavailable For Legal Reasons"; break;
-          case 500: $description = "Internal Server Error"; break;
-          case 501: $description = "Not Implemented"; break;
-          case 502: $description = "Bad Gateway"; break;
-          case 503: $description = "Service Unavailable"; break;
-          case 504: $description = "Gateway Timeout"; break;
-          case 505: $description = "HTTP Version Not Supported"; break;
-          case 506: $description = "Variant Also Negotiates"; break;
-          case 507: $description = "Insufficient Storage (WebDAV)"; break;
-          case 508: $description = "Loop Detected (WebDAV)"; break;
-          case 509: $description = "Bandwidth Limit Exceeded"; break;
-          case 510: $description = "Not Extended"; break;
-          case 511: $description = "Network Authentication Required"; break;
-          case 521: $description = "Web Server Is Down"; break;
-          case 522: $description = "Connection Timed Out"; break;
-          case 523: $description = "Origin Is Unreachable"; break;
-          default:
-            $description = "Unknown";
-        }
-      } else {
-        $description = "Invalid Response; Out of Range ($code)";
-        $http_code = "(out of range)";
-      }
-    } else {
-      $description = "Response Not Numeric";
-      $http_code = "(invalid)";
-    }
-  } else {
-    $description = "Response Is Null";
-    $http_code = "(null)";
-  }
-  $retval = array(
-    "ok" => $status_ok,
-    "description" => $description,
-    "code" => $http_code,
-  );
-  return $retval;
-}
-
-/*  Adds the favicon path to the URL */
-function addFavIconToURL($url) {
-  if(strrev($url)[0]==='/') {
-    // Already has slash
-  } else {
-    $url .= "/";
-  }
-  $url .= URL_PATH_FAVICON;
-  return $url;
-}
-
 function checkIconAcceptance($url = null) {
   debugSection("checkIconAcceptance");
   $retval = false;
@@ -2117,8 +2180,8 @@ function initializePHPAgent() {
   debugSection("initializePHPAgent");
   $userAgent = getConfiguration("http","useragent");
   if (is_null($userAgent)) { $userAgent = getConfiguration("http","default_useragent"); }
-  if (!is_null($userAgent)) { ini_set('user_agent', $userAgent); }
-  if (ini_get("default_socket_timeout") > getConfiguration("http","http_timeout")) { ini_set("default_socket_timeout", getConfiguration("http","http_timeout")); }
+  if (!is_null($userAgent)) { ini_set(PHP_OPTION_USER_AGENT, $userAgent); }
+  if (ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT) > getConfiguration("http","http_timeout")) { ini_set(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT, getConfiguration("http","http_timeout")); }
   debugSection();
 }
 
