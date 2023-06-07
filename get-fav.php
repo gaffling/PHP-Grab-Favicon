@@ -17,7 +17,14 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Initial work for processing parameters in HTML mode created (completely untested)
+  Added --checklocal/--nochecklocal/--storeifnew (requires --checklocal and --store)
+    These do not do anything yet.
+  Added --showconfig/noshowconfig to show running configuration options
+  Added --showconfigonly (implies --showconfig), shows running configuration and exits.
+  Added --silent (console mode only)
   Refined HTTP Response Parsing
+  PHP .ini values are now in defines so if something changes down the road it's easier to update
   Added more parameter checking
   Added major/minor to version
   Added --apiconfigfile=PATHNAME to load API Definitions
@@ -79,6 +86,9 @@ NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
 TO DO:
 -------------------------------------
+  HTML rendering overhaul
+    create a master CSS (still all in one "document")
+    create more formatting variables
   Add config for temporary image file use
       script will need read/write permissions
   Add functions to get image width/height (and verify type)
@@ -86,10 +96,8 @@ TO DO:
         raw data, file, url
       Data paths:
         exif, gd, imagemagick, gmagick and a fallback
-  Add option to show running configuration and exit
   Add option to actually check icon on disk's size/type? (post save)
   Change: RegEx search should have simliar path to the new json parser as there can be multiple formats/icons defined
-  Add --silent (console mode only)
   Add another fallback:
     try to identify file (if needed download a temporary file), return mime type using fopen/fread/file_get_contents
   Update HTTP Mode
@@ -120,7 +128,6 @@ ISSUES:
 CHANGES
 -----------------------------
 Should optimize processing a bit, right now things are reloaded when they don't need to be.
-  New Options: --checklocal  --nochecklocal --saveifnew  (requires --checklocal and --save)
   
   Flow:
   
@@ -272,7 +279,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306062230');
+define('PROGRAM_BUILD', '202306071311');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -284,10 +291,12 @@ define('DEFAULT_DEBUG_DUMP_STRUCTURES', true);
 define('DEFAULT_ENABLE_APIS', true);
 define('DEFAULT_USE_CURL', true);
 define('DEFAULT_STORE', true);
+define('DEFAULT_STORE_IF_NEW', false);
 define('DEFAULT_TRY_HOMEPAGE', true);
 define('DEFAULT_OVERWRITE', false);
 define('DEFAULT_ENABLE_BLOCKLIST', true);
 define('DEFAULT_TENACIOUS', false); 
+define('DEFAULT_CHECKLOCAL', false);
 define('DEFAULT_REMOVE_TLD', false);
 define('DEFAULT_ALLOW_OCTET_STREAM', false);
 define('DEFAULT_ALLOW_OCTET_STREAM_IF_FILEINFO_OR_MIMETYPE', true);
@@ -313,6 +322,7 @@ define('DEFAULT_API_DATABASE', "get-fav-api.ini");
 define('DEFAULT_INI_FILE', "get-fav.ini");
 define('DEFAULT_USER_AGENT', "FaviconBot/1.0/");
 define('DEFAULT_VALID_EXTENSIONS', "gif,webp,png,ico,bmp,svg,jpg");
+define('DEFAULT_SHOW_RUNNING_CONFIGURATION', true);
 define('DEFAULT_PROTOCOL_IS_HTTPS', true);
 define('DEFAULT_FALLBACK_IF_HTTPS_NOT_AVAILABLE', true);
 
@@ -421,38 +431,8 @@ setItem("banner",getItem("project_name") . " (" .getItem("program_name") . ") v"
 setItem("copyright",PROGRAM_COPYRIGHT);
 setItem("configuration","defaults");
 
-/*  Populate $capabilities structure to determine what functions can be used */
+/*  Populate capabilities structure to determine what functions can be used */
 determineCapabilities();
-
-/*  Special Config Load Options */
-if (ENABLE_SAME_FOLDER_API_INI) {
-  if (file_exists(DEFAULT_API_DATABASE)) {
-    $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
-    setConfiguration("global","api_list",DEFAULT_API_DATABASE);
-  }
-}
-
-if (ENABLE_SAME_FOLDER_INI) {
-  if (file_exists(DEFAULT_INI_FILE)) {
-    $configuration_from_file = parse_ini_file(DEFAULT_INI_FILE,true,INI_SCANNER_RAW);
-    if (isset($configuration_from_file)) {
-      $configuration = array_replace_recursive($configuration, $configuration_from_file);
-      setItem("configuration",DEFAULT_INI_FILE);
-      unset($configuration_from_file);
-      validateConfiguration();
-    }
-  }
-}
-
-/*
-**  If no APIs have been loaded, add Default APIs
-**  addAPI($name,$url,$json,$enabled,$json_structure(),$display)
-*/
-
-if (empty($apiList)) { loadDefaultAPIs(); }
-
-$display_name_API_list = getAPIList(true);
-$display_API_list = getAPIList();
 
 /*  
 ** Set Configuration Defaults
@@ -470,6 +450,7 @@ setConfiguration("global","api",DEFAULT_ENABLE_APIS);
 setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
 setConfiguration("global","icon_size",DEFAULT_SIZE);
 setConfiguration("global","tenacious",DEFAULT_TENACIOUS);
+setConfiguration("global","showconfig",DEFAULT_SHOW_RUNNING_CONFIGURATION);
 setConfiguration("debug","dump_file",DEFAULT_DEBUG_DUMP_FILE);
 setConfiguration("debug","dump_structures",DEFAULT_DEBUG_DUMP_STRUCTURES);
 setConfiguration("console","enabled",DEFAULT_LOG_CONSOLE_ENABLED);
@@ -479,9 +460,11 @@ setConfiguration("console","timestampformat",DEFAULT_LOG_TIMESTAMP_FORMAT);
 setConfiguration("curl","enabled",getCapability("php","curl"));
 setConfiguration("curl","verbose",false);
 setConfiguration("curl","showprogress",false);
+setConfiguration("files","check_local",DEFAULT_CHECKLOCAL);
 setConfiguration("files","local_path",DEFAULT_LOCAL_PATH);
 setConfiguration("files","overwrite",DEFAULT_OVERWRITE);
 setConfiguration("files","store",DEFAULT_STORE);
+setConfiguration("files","store_if_new",DEFAULT_STORE_IF_NEW);
 setConfiguration("files","remove_tld",DEFAULT_REMOVE_TLD);
 setConfiguration("http","default_useragent",DEFAULT_USER_AGENT);
 setConfiguration("http","dns_timeout",DEFAULT_DNS_TIMEOUT);
@@ -506,258 +489,343 @@ setConfiguration("mode","console",getCapability("php","console"));
 if (isset($_SERVER['SERVER_NAME'])) { setConfiguration("http","default_useragent",DEFAULT_USER_AGENT . " (+http://". $_SERVER['SERVER_NAME'] ."/)"); }
 if (!DEFAULT_USE_CURL) { setConfiguration("curl","enabled",false); }
 
-/*  Ensure Configuration Is Setup Properly */
+/*  Ensure Initial Configuration Is Setup Properly */
 validateConfiguration();
 
-if (getConfiguration("mode","console")) { $script_name = basename(__FILE__); } else { $script_name = basename($_SERVER['PHP_SELF']); }
-
-/* Command Line Options */
-$shortopts  = "";
-$shortopts  = "b::";
-$shortopts  = "l::";
-$shortopts  = "p::";
-$shortopts  = "c::";
-$shortopts .= "h?";
-$shortopts .= "v";
-
-$longopts  = array(
-  "logfile::",
-  "list::",
-  "blocklist::",
-  "path::",
-  "config::",
-  "configfile::",
-  "validtypes::",
-  "user-agent::",
-  "curl-timeout::",
-  "http-timeout::",
-  "connect-timeout::",
-  "dns-timeout::",
-  "enableapis::",
-  "disableapis::",
-  "loglevel::",
-  "level::",
-  "size::",
-  "apiconfig::",
-  "apiconfigfile::",
-  "tryhomepage",
-  "onlyuseapis",
-  "disableallapis",
-  "enableblocklist",
-  "disableblocklist",
-  "log",
-  "nolog",
-  "append",
-  "noappend",
-  "timestamp",
-  "notimestamp",
-  "showtimestamp",
-  "hidetimestamp",
-  "store",
-  "nostore",
-  "save",
-  "nosave",
-  "removetld",
-  "noremovetld",
-  "overwrite",
-  "nooverwrite",
-  "bufferhttp",
-  "nobufferhttp",
-  "allowoctetstream",
-  "disallowoctetstream",
-  "skip",
-  "nocurl",
-  "curl-verbose",
-  "consolemode",
-  "noconsolemode",
-  "tenacious",
-  "notenacious",
-  "debug",
-  "help",
-  "version",
-  "ver",
-);
-
-$options = getopt($shortopts, $longopts);
-
-/*  Show Version & Exit */
-if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['version']))) {
-  echo getItem("banner") . "\n";
-  echo getItem("copyright") . "\n";
-  exit;
-}
-
-/*  Show Help & Exit */
-if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?']))) {
-  echo "Usage: $script_name (Switches)\n";
-  echo "\n";
-  echo "Available APIs: $display_API_list (" . getConfiguration("global","api_list","internal") . ")\n";
-  echo "Lists can be separated with space, comma or semi-colon.\n";
-  echo "\n";
-  echo "--configfile=FILE           Pathname to read for configuration.\n";
-  echo "--apiconfigfile=FILE        Pathname to read for APIs.\n";
-  echo "--list=FILE/LIST            Pathname or a delimited list of URLs to check.\n";
-  echo "--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.\n";
-  echo "--validtypes=FILE/LIST      Valid icon types (default is " . DEFAULT_VALID_EXTENSIONS . ")\n";
-  echo "--logfile=FILE              Pathname for log file (default is " . DEFAULT_LOG_PATHNAME . ")\n";
-  echo "--path=PATH                 Location to store icons (default is " . DEFAULT_LOCAL_PATH . ")\n";
-  echo "--size=NUMBER               Try to get icon size (default is " . DEFAULT_SIZE . ")\n";
-  echo "\n";
-  echo "--tryhomepage               Try homepage first, then APIs. (default is " . showBoolean(DEFAULT_TRY_HOMEPAGE) . ")\n";
-  echo "--onlyuseapis               Only use APIs.\n";
-  echo "--disableapis               Don't use APIs.\n";
-  echo "--enableblocklist           Enable blocklist. (default is ". showBoolean(DEFAULT_ENABLE_BLOCKLIST) . ")\n";
-  echo "--disableblocklist          Disable blocklist.\n";
-  echo "--store                     Store favicons locally. (default is ". showBoolean(DEFAULT_STORE) . ")\n";
-  echo "--nostore                   Do not store favicons locally.\n";
-  echo "--overwrite                 Overwrite local favicons. (default is ". showBoolean(DEFAULT_OVERWRITE) . ")\n";
-  echo "--skip                      Skip local favicons.\n";
-  echo "--removetld                 Remove top level domain from filename. (default is " . showBoolean(DEFAULT_REMOVE_TLD) . ")\n";
-  echo "--noremovetld               Don't remove top level domain from filename.\n";
-  echo "--tenacious                 Try all enabled APIs until success. (default is " . showBoolean(DEFAULT_TENACIOUS) . ")\n";
-  echo "--notenacious               Try a random API.\n";
-  echo "--allowoctetstream          Allow MimeType 'application/octet-stream'. (default is " . showBoolean(DEFAULT_ALLOW_OCTET_STREAM) . ")\n";
-  echo "--disallowoctetstream       Block MimeType 'application/octet-stream' for icons.\n";
-  echo "--consolemode               Force console output.\n";
-  echo "--noconsolemode             Force HTML output.\n";
-  echo "--debug                     Enable debug mode.\n";
-  echo "--help                      This listing and exit.\n";
-  echo "--version                   Show version and exit.\n";
-  echo "\n";
-  echo "Advanced:\n";
-  echo "--user-agent=AGENT_STRING   Customize the user agent.\n";
-  echo "--nocurl                    Disable cURL.\n";
-  echo "--bufferhttp                Buffer HTTP page loading. (default is " . showBoolean(DEFAULT_USE_LOAD_BUFFERING) . ")\n";
-  echo "--nobufferhttp              Disable HTTP page load buffering.\n";
-  echo "--curl-verbose              Enable cURL verbose.\n";
-  echo "--curl-progress             Enable cURL progress bar.\n";
-  echo "--enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.\n";
-  echo "--disableapis=FILE/LIST     Filename or a delimited list of APIs to disable.\n";
-  echo "--http-timeout=SECONDS      Set HTTP timeout. (default is " . DEFAULT_HTTP_TIMEOUT . ").\n";
-  echo "--connect-timeout=SECONDS   Set HTTP connect timeout. (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
-  echo "--dns-timeout=SECONDS       Set DNS lookup timeout. (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
-  echo "\n";
-  echo "Logging:\n";
-  echo "--log                       Enable debug logging. (default is " . showBoolean(DEFAULT_LOG_FILE_ENABLED) . ")\n";
-  echo "--nolog                     Disable debug logging.\n";
-  echo "--append                    Append debug log. (default is " . showBoolean(DEFAULT_LOG_APPEND) . ")\n";
-  echo "--noappend                  Always overwrite debug log.\n";
-  echo "--timestamp                 Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP_FILE) . ")\n";
-  echo "--notimestamp               Do not show timestamps in debug log.\n";
-  echo "--loglevel=NUMBER           Set debug logging level. (default is " . DEFAULT_LOG_LEVEL_FILE . ")\n";
-  echo "\n";
-  echo "Console:\n";
-  echo "--level=NUMBER              Set debug logging level. (default is " . DEFAULT_LOG_LEVEL_CONSOLE . ")\n";
-  echo "--showtimestamp             Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP_CONSOLE) . ")\n";
-  echo "--hidetimestamp             Do not show timestamps in debug log.\n";
-  exit;
-}
-
-
-/* 
-**  Command Line Options
-**  Aliased Options
-*/
-
-if (isset($options['curl-timeout'])) { $options['http-timeout'] = $options['curl-timeout']; }
-if (isset($options['p'])) { $options['path'] = $options['p']; } 
-if (isset($options['l'])) { $options['list'] = $options['l']; }
-if (isset($options['b'])) { $options['blocklist'] = $options['b']; }
-if (isset($options['config'])) { $options['configfile'] = $options['config']; }
-if (isset($options['apiconfig'])) { $options['apiconfigfile'] = $options['apiconfig']; }
-if (isset($options['c'])) { $options['configfile'] = $options['c']; }
-if (isset($options['save'])) { $options['store'] = $options['save']; } 
-if (isset($options['nosave'])) { $options['nostore'] = $options['nosave']; } 
-if (isset($options['skip'])) { $options['nooverwrite'] = $options['skip']; } 
-
-
-/*
-**  Load Configuration File
-**
-**  The way the config file works is it's parsed by PHP and merged, directly, with the configuration array structure.
-**  This is why calling validateConfiguration() is important.
-*/
-
-if (isset($options['configfile'])) {
-  if (!is_null($options['configfile'])) {
-    if (file_exists($options['configfile'])) {
-      $configuration_from_file = parse_ini_file($options['configfile'],true,INI_SCANNER_RAW);
-      if (isset($configuration_from_file)) {
-        $configuration = array_replace_recursive($configuration, $configuration_from_file);
-        unset($configuration_from_file);
-        validateConfiguration();
+/*  Special Config Load Options */
+if (defined("ENABLE_SAME_FOLDER_API_INI")) {
+  if (ENABLE_SAME_FOLDER_API_INI) {
+    if (defined("DEFAULT_API_DATABASE")) {
+      if (is_string(DEFAULT_API_DATABASE)) {
+        if (file_exists(DEFAULT_API_DATABASE)) {
+          $apiList = parse_ini_file(DEFAULT_API_DATABASE,true,INI_SCANNER_TYPED);
+          setConfiguration("global","api_list",DEFAULT_API_DATABASE);
+        }
       }
     }
   }
 }
 
-/*
-**  Load API Config
-*/
-if (isset($options['apiconfigfile'])) {
-  if (!is_null($options['apiconfigfile'])) {
-    if (file_exists($options['apiconfigfile'])) {
-      $apiList = parse_ini_file($options['apiconfigfile'],true,INI_SCANNER_TYPED);
-      if (empty($apiList)) {
-        loadDefaultAPIs();
-      } else {
-        setConfiguration("global","api_list",$options['apiconfigfile']);
+if (defined("ENABLE_SAME_FOLDER_INI")) {
+  if (ENABLE_SAME_FOLDER_INI) {
+    if (defined("DEFAULT_INI_FILE")) {
+      if (is_string(DEFAULT_INI_FILE)) {
+        if (file_exists(DEFAULT_INI_FILE)) {
+          $configuration_from_file = parse_ini_file(DEFAULT_INI_FILE,true,INI_SCANNER_RAW);
+          if (isset($configuration_from_file)) {
+            if (is_array($configuration_from_file)) {
+              $configuration = array_replace_recursive($configuration, $configuration_from_file);
+              setItem("configuration",DEFAULT_INI_FILE);
+              unset($configuration_from_file);
+              validateConfiguration();
+            }
+          }
+        }
       }
-      $display_name_API_list = getAPIList(true);
-      $display_API_list = getAPIList();
     }
   }
 }
+
+
+/*
+**  If no APIs have been loaded, add Default APIs
+**  addAPI($name,$url,$json,$enabled,$json_structure(),$display)
+*/
+
+if (empty($apiList)) { loadDefaultAPIs(); }
+
+$display_name_API_list = getAPIList(true);
+$display_API_list = getAPIList();
+
+/*  Override Options for command line or HTTP */
+if (getConfiguration("mode","console")) { 
+  /*  Command Line Options */
+  $script_name = basename(__FILE__);
+  
+  $shortopts  = "";
+  $shortopts  = "b::";
+  $shortopts  = "l::";
+  $shortopts  = "p::";
+  $shortopts  = "c::";
+  $shortopts .= "h?";
+  $shortopts .= "v";
+
+  $longopts  = array(
+    "logfile::",
+    "list::",
+    "blocklist::",
+    "path::",
+    "config::",
+    "configfile::",
+    "validtypes::",
+    "user-agent::",
+    "curl-timeout::",
+    "http-timeout::",
+    "connect-timeout::",
+    "dns-timeout::",
+    "enableapis::",
+    "disableapis::",
+    "loglevel::",
+    "level::",
+    "size::",
+    "apiconfig::",
+    "apiconfigfile::",
+    "tryhomepage",
+    "onlyuseapis",
+    "disableallapis",
+    "enableblocklist",
+    "disableblocklist",
+    "log",
+    "nolog",
+    "append",
+    "noappend",
+    "timestamp",
+    "notimestamp",
+    "showtimestamp",
+    "hidetimestamp",
+    "store",
+    "nostore",
+    "storeifnew",
+    "checklocal",
+    "nochecklocal",
+    "save",
+    "nosave",
+    "saveifnew",
+    "removetld",
+    "noremovetld",
+    "overwrite",
+    "nooverwrite",
+    "bufferhttp",
+    "nobufferhttp",
+    "allowoctetstream",
+    "disallowoctetstream",
+    "skip",
+    "nocurl",
+    "curl-verbose",
+    "consolemode",
+    "noconsolemode",
+    "tenacious",
+    "notenacious",
+    "showconfig",
+    "noshowconfig",
+    "debug",
+    "silent",
+    "showconfigonly",
+    "help",
+    "version",
+    "ver",
+  );
+
+  $options = getopt($shortopts, $longopts);
+
+  /*  Process Special Modes, These All Exit! */
+  /*  Show Version & Exit */
+  if ((isset($options['v'])) || (isset($options['ver'])) || (isset($options['version']))) {
+    echo getItem("banner") . "\n";
+    echo getItem("copyright") . "\n";
+    exit;
+  }
+
+  /*  Show Help & Exit */
+  if ((isset($options['help'])) || (isset($options['h'])) || (isset($options['?']))) {
+    echo "Usage: $script_name (Switches)\n";
+    echo "\n";
+    echo "Available APIs: $display_API_list (" . getConfiguration("global","api_list","internal") . ")\n";
+    echo "Lists can be separated with space, comma or semi-colon.\n";
+    echo "\n";
+    echo "--configfile=FILE           Pathname to read for configuration.\n";
+    echo "--apiconfigfile=FILE        Pathname to read for APIs.\n";
+    echo "--list=FILE/LIST            Pathname or a delimited list of URLs to check.\n";
+    echo "--blocklist=FILE/LIST       Pathname or a delimited list of MD5 hashes to block.\n";
+    echo "--validtypes=FILE/LIST      Valid icon types (default is " . DEFAULT_VALID_EXTENSIONS . ")\n";
+    echo "--logfile=FILE              Pathname for log file (default is " . DEFAULT_LOG_PATHNAME . ")\n";
+    echo "--path=PATH                 Location to store icons (default is " . DEFAULT_LOCAL_PATH . ")\n";
+    echo "--size=NUMBER               Try to get icon size (default is " . DEFAULT_SIZE . ")\n";
+    echo "\n";
+    echo "--tryhomepage               Try homepage first, then APIs. (default is " . showBoolean(DEFAULT_TRY_HOMEPAGE) . ")\n";
+    echo "--onlyuseapis               Only use APIs.\n";
+    echo "--disableapis               Don't use APIs.\n";
+    echo "--enableblocklist           Enable blocklist. (default is ". showBoolean(DEFAULT_ENABLE_BLOCKLIST) . ")\n";
+    echo "--disableblocklist          Disable blocklist.\n";
+    echo "--store                     Store favicons locally. (default is ". showBoolean(DEFAULT_STORE) . ")\n";
+    echo "--nostore                   Do not store favicons locally.\n";
+    echo "--checklocal                Check local icons. (default is ". showBoolean(DEFAULT_CHECKLOCAL) . ")\n";
+    echo "--nochecklocal              Do not check local icons.\n";
+    echo "--storeifnew                Store favicon if new (default is ". showBoolean(DEFAULT_STORE_IF_NEW) . ")\n";
+    echo "--overwrite                 Overwrite local favicons. (default is ". showBoolean(DEFAULT_OVERWRITE) . ")\n";
+    echo "--skip                      Skip local favicons.\n";
+    echo "--removetld                 Remove top level domain from filename. (default is " . showBoolean(DEFAULT_REMOVE_TLD) . ")\n";
+    echo "--noremovetld               Don't remove top level domain from filename.\n";
+    echo "--tenacious                 Try all enabled APIs until success. (default is " . showBoolean(DEFAULT_TENACIOUS) . ")\n";
+    echo "--notenacious               Try a random API.\n";
+    echo "--showconfig                Show running configuration. (default is " . showBoolean(DEFAULT_SHOW_RUNNING_CONFIGURATION) . ")\n";
+    echo "--noshowconfig              Skip showing running configuration.\n";
+    echo "--allowoctetstream          Allow MimeType 'application/octet-stream'. (default is " . showBoolean(DEFAULT_ALLOW_OCTET_STREAM) . ")\n";
+    echo "--disallowoctetstream       Block MimeType 'application/octet-stream' for icons.\n";
+    echo "--consolemode               Force console output.\n";
+    echo "--noconsolemode             Force HTML output.\n";
+    echo "--debug                     Enable debug mode.\n";
+    echo "--silent                    Disable console output (Ignored in HTML mode.)\n";
+    echo "--help                      This listing and exit.\n";
+    echo "--showconfigonly            Show running configuration and exit. (Assumes --showconfig).\n";
+    echo "--version                   Show version and exit.\n";
+    echo "\n";
+    echo "Advanced:\n";
+    echo "--user-agent=AGENT_STRING   Customize the user agent.\n";
+    echo "--nocurl                    Disable cURL.\n";
+    echo "--bufferhttp                Buffer HTTP page loading. (default is " . showBoolean(DEFAULT_USE_LOAD_BUFFERING) . ")\n";
+    echo "--nobufferhttp              Disable HTTP page load buffering.\n";
+    echo "--curl-verbose              Enable cURL verbose.\n";
+    echo "--curl-progress             Enable cURL progress bar.\n";
+    echo "--enableapis=FILE/LIST      Filename or a delimited list of APIs to enable.\n";
+    echo "--disableapis=FILE/LIST     Filename or a delimited list of APIs to disable.\n";
+    echo "--http-timeout=SECONDS      Set HTTP timeout. (default is " . DEFAULT_HTTP_TIMEOUT . ").\n";
+    echo "--connect-timeout=SECONDS   Set HTTP connect timeout. (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
+    echo "--dns-timeout=SECONDS       Set DNS lookup timeout. (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
+    echo "\n";
+    echo "Logging:\n";
+    echo "--log                       Enable debug logging. (default is " . showBoolean(DEFAULT_LOG_FILE_ENABLED) . ")\n";
+    echo "--nolog                     Disable debug logging.\n";
+    echo "--append                    Append debug log. (default is " . showBoolean(DEFAULT_LOG_APPEND) . ")\n";
+    echo "--noappend                  Always overwrite debug log.\n";
+    echo "--timestamp                 Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP_FILE) . ")\n";
+    echo "--notimestamp               Do not show timestamps in debug log.\n";
+    echo "--loglevel=NUMBER           Set debug logging level. (default is " . DEFAULT_LOG_LEVEL_FILE . ")\n";
+    echo "\n";
+    echo "Console:\n";
+    echo "--level=NUMBER              Set debug logging level. (default is " . DEFAULT_LOG_LEVEL_CONSOLE . ")\n";
+    echo "--showtimestamp             Enable debug log timestamps. (default is " . showBoolean(DEFAULT_LOG_TIMESTAMP_CONSOLE) . ")\n";
+    echo "--hidetimestamp             Do not show timestamps in debug log.\n";
+    exit;
+  }
+
+
+  /* 
+  **  Command Line Options
+  **  Aliased Options
+  */
+
+  if (isset($options['curl-timeout'])) { $options['http-timeout'] = $options['curl-timeout']; }
+  if (isset($options['p'])) { $options['path'] = $options['p']; } 
+  if (isset($options['l'])) { $options['list'] = $options['l']; }
+  if (isset($options['b'])) { $options['blocklist'] = $options['b']; }
+  if (isset($options['config'])) { $options['configfile'] = $options['config']; }
+  if (isset($options['apiconfig'])) { $options['apiconfigfile'] = $options['apiconfig']; }
+  if (isset($options['c'])) { $options['configfile'] = $options['c']; }
+  if (isset($options['save'])) { $options['store'] = $options['save']; } 
+  if (isset($options['saveifnew'])) { $options['storeifnew'] = $options['saveifnew']; } 
+  if (isset($options['nosave'])) { $options['nostore'] = $options['nosave']; } 
+  if (isset($options['skip'])) { $options['nooverwrite'] = $options['skip']; } 
+
+
+  /*
+  **  Load Configuration File
+  **
+  **  The way the config file works is it's parsed by PHP and merged, directly, with the configuration array structure.
+  **  This is why calling validateConfiguration() is important.
+  */
+
+  if (isset($options['configfile'])) {
+    if (!is_null($options['configfile'])) {
+      if (file_exists($options['configfile'])) {
+        $configuration_from_file = parse_ini_file($options['configfile'],true,INI_SCANNER_RAW);
+        if (isset($configuration_from_file)) {
+          $configuration = array_replace_recursive($configuration, $configuration_from_file);
+          unset($configuration_from_file);
+          validateConfiguration();
+        }
+      }
+    }
+  }
+
+  /*
+  **  Load API Config
+  */
+  if (isset($options['apiconfigfile'])) {
+    if (!is_null($options['apiconfigfile'])) {
+      if (file_exists($options['apiconfigfile'])) {
+        $apiList = parse_ini_file($options['apiconfigfile'],true,INI_SCANNER_TYPED);
+        if (empty($apiList)) {
+          loadDefaultAPIs();
+        } else {
+          setConfiguration("global","api_list",$options['apiconfigfile']);
+        }
+        $display_name_API_list = getAPIList(true);
+        $display_API_list = getAPIList();
+      }
+    }
+  }
+        
+  /*
+  **   Process Command Line Switches
+  */
+   
+  setConfiguration("console","level",(isset($options['level']))?$options['level']:null);
+  setConfiguration("console","timestamp",(isset($options['showtimestamp']))?$options['showtimestamp']:null,(isset($options['hidetimestamp']))?$options['hidetimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("curl","verbose",(isset($options['curl-verbose']))?$options['curl-verbose']:null,null,CONFIG_TYPE_SWITCH);
+  setConfiguration("curl","showprogress",(isset($options['curl-showprogress']))?$options['curl-showprogress']:null,null,CONFIG_TYPE_SWITCH);
+  setConfiguration("files","check_local",(isset($options['checklocal']))?$options['checklocal']:null,(isset($options['nochecklocal']))?$options['nochecklocal']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("files","local_path",(isset($options['path']))?$options['path']:null,null,CONFIG_TYPE_PATH);
+  setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("files","store_if_new",(isset($options['storeifnew']))?$options['storeifnew']:null,null,CONFIG_TYPE_SWITCH);
+  setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("files","remove_tld",(isset($options['removetld']))?$options['removetld']:null,(isset($options['noremovetld']))?$options['noremovetld']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("global","allow_octet_stream",(isset($options['allowoctetstream']))?$options['allowoctetstream']:null,(isset($options['disallowoctetstream']))?$options['disallowoctetstream']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("global","blocklist",(isset($options['enableblocklist']))?$options['enableblocklist']:null,(isset($options['disableblocklist']))?$options['disableblocklist']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("global","debug",(isset($options['debug']))?$options['debug']:null,null,CONFIG_TYPE_SWITCH);
+  setConfiguration("global","icon_size",(isset($options['size']))?$options['size']:null);
+  setConfiguration("global","showconfig",(isset($options['showconfig']))?$options['showconfig']:null,(isset($options['noshowconfig']))?$options['noshowconfig']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("global","tenacious",(isset($options['tenacious']))?$options['tenacious']:null,(isset($options['notenacious']))?$options['notenacious']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("http","use_buffering",(isset($options['bufferhttp']))?$options['bufferhttp']:null,(isset($options['nobufferhttp']))?$options['nobufferhttp']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("http","try_homepage",(isset($options['tryhomepage']))?$options['tryhomepage']:null,(isset($options['onlyuseapis']))?$options['onlyuseapis']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("http","useragent",(isset($options['user-agent']))?$options['user-agent']:null,null,CONFIG_TYPE_USERAGENT);
+  setConfiguration("http","http_timeout",(isset($options['http-timeout']))?$options['http-timeout']:null);
+  setConfiguration("http","http_timeout_connect",(isset($options['connect-timeout']))?$options['connect-timeout']:null);
+  setConfiguration("http","dns_timeout",(isset($options['dns-timeout']))?$options['dns-timeout']:null);
+  setConfiguration("logging","append",(isset($options['append']))?$options['append']:null,(isset($options['noappend']))?$options['noappend']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("logging","enabled",(isset($options['log']))?$options['log']:null,(isset($options['nolog']))?$options['nolog']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("logging","level",(isset($options['loglevel']))?$options['loglevel']:null);
+  setConfiguration("logging","pathname",(isset($options['logfile']))?$options['logfile']:null,null);
+  setConfiguration("logging","timestamp",(isset($options['timestamp']))?$options['timestamp']:null,(isset($options['notimestamp']))?$options['notimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("mode","console",(isset($options['consolemode']))?$options['consolemode']:null,(isset($options['noconsolemode']))?$options['noconsolemode']:null,CONFIG_TYPE_SWITCH_PAIR);
+
+  if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
+  if (isset($options['disableallapis'])) { setConfiguration("global","api",false); }
+  if (isset($options['silent'])) { if (getConfiguration("mode","console")) { setConfiguration("console","enabled",false); } }
+
+  /*  Configuration Validate */
+  validateConfiguration();
+} else {
+  /*  HTML Mode */
+  $script_name = basename($_SERVER['PHP_SELF']);
+  
+  if (defined("ENABLE_WEB_INPUT")) {
+    if (ENABLE_WEB_INPUT) {
       
-/*
-**   Process Command Line Switches
-*/
- 
-setConfiguration("console","level",(isset($options['level']))?$options['level']:null);
-setConfiguration("console","timestamp",(isset($options['showtimestamp']))?$options['showtimestamp']:null,(isset($options['hidetimestamp']))?$options['hidetimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("curl","verbose",(isset($options['curl-verbose']))?$options['curl-verbose']:null,null,CONFIG_TYPE_SWITCH);
-setConfiguration("curl","showprogress",(isset($options['curl-showprogress']))?$options['curl-showprogress']:null,null,CONFIG_TYPE_SWITCH);
-setConfiguration("files","local_path",(isset($options['path']))?$options['path']:null,null,CONFIG_TYPE_PATH);
-setConfiguration("files","store",(isset($options['store']))?$options['store']:null,(isset($options['nostore']))?$options['nostore']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("files","overwrite",(isset($options['overwrite']))?$options['overwrite']:null,(isset($options['nooverwrite']))?$options['nooverwrite']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("files","remove_tld",(isset($options['removetld']))?$options['removetld']:null,(isset($options['noremovetld']))?$options['noremovetld']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("global","allow_octet_stream",(isset($options['allowoctetstream']))?$options['allowoctetstream']:null,(isset($options['disallowoctetstream']))?$options['disallowoctetstream']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("global","blocklist",(isset($options['enableblocklist']))?$options['enableblocklist']:null,(isset($options['disableblocklist']))?$options['disableblocklist']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("global","debug",(isset($options['debug']))?$options['debug']:null,null,CONFIG_TYPE_SWITCH);
-setConfiguration("global","icon_size",(isset($options['size']))?$options['size']:null);
-setConfiguration("global","tenacious",(isset($options['tenacious']))?$options['tenacious']:null,(isset($options['notenacious']))?$options['notenacious']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("http","use_buffering",(isset($options['bufferhttp']))?$options['bufferhttp']:null,(isset($options['nobufferhttp']))?$options['nobufferhttp']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("http","try_homepage",(isset($options['tryhomepage']))?$options['tryhomepage']:null,(isset($options['onlyuseapis']))?$options['onlyuseapis']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("http","useragent",(isset($options['user-agent']))?$options['user-agent']:null,null,CONFIG_TYPE_USERAGENT);
-setConfiguration("http","http_timeout",(isset($options['http-timeout']))?$options['http-timeout']:null);
-setConfiguration("http","http_timeout_connect",(isset($options['connect-timeout']))?$options['connect-timeout']:null);
-setConfiguration("http","dns_timeout",(isset($options['dns-timeout']))?$options['dns-timeout']:null);
-setConfiguration("logging","append",(isset($options['append']))?$options['append']:null,(isset($options['noappend']))?$options['noappend']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("logging","enabled",(isset($options['log']))?$options['log']:null,(isset($options['nolog']))?$options['nolog']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("logging","level",(isset($options['loglevel']))?$options['loglevel']:null);
-setConfiguration("logging","pathname",(isset($options['logfile']))?$options['logfile']:null,null);
-setConfiguration("logging","timestamp",(isset($options['timestamp']))?$options['timestamp']:null,(isset($options['notimestamp']))?$options['notimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
-setConfiguration("mode","console",(isset($options['consolemode']))?$options['consolemode']:null,(isset($options['noconsolemode']))?$options['noconsolemode']:null,CONFIG_TYPE_SWITCH_PAIR);
+      var_dump($_GET);
+      echo "***\n";
+      var_dump($_POST);
+      echo "***\n";
+      
+      /*  Configuration Validate */
+      validateConfiguration();  
+    }
+    
+  }
 
-if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
-if (isset($options['disableallapis'])) { setConfiguration("global","api",false); }
-
-/*  Final Configuration Validate */
-validateConfiguration();
+}
 
 /*  Start Logging (Console/HTML/File) */
 writeLog(getItem("banner"),TYPE_ALL);
 writeLog(getItem("copyright"),TYPE_ALL);
 writeLog("PHP Version: " . getCapability("php","version"),TYPE_VERBOSE);
-if (debugMode()) {
-  writeLog("Running Debug Mode",TYPE_VERBOSE);
-  writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
-  showCapabilities(TYPE_VERBOSE);
-}
+if (debugMode()) { writeLog("Running Debug Mode",TYPE_VERBOSE); }
+if (isset($options['silent'])) { if (getConfiguration("mode","console")) { writeLog("Console Output Has Been Disabled",TYPE_NOTICE); } }
 
-/*  Warn If Capabilities Are Too Weak */
+/*  Warn If Capabilities Are Too Weak or Broken */
 if ((!getCapability("php","exif")) && (!getCapability("php","fileinfo")) && (!getCapability("php","mimetype"))) { writeLog("Your PHP installation is reporting exif, fileinfo and mimetype as unavailable, results will be impaired.",TYPE_WARNING); }
-
+if ((!getCapability("php","curl")) && (!getCapability("php","get"))) { if (!ini_get(PHP_OPTION_ALLOW_URL_FOPEN)) { writeLog("Your PHP installation is does not have cURL or file_get_contents avaialble and the PHP option '" . PHP_OPTION_ALLOW_URL_FOPEN . "' is disabled, web access is essentially disabled.",TYPE_WARNING); } }
+            
 /*  
 **  Process Lists
 */
@@ -820,7 +888,6 @@ if (getConfiguration("global","api")) {
 $display_API_list = getAPIList();
 if (is_null($display_API_list)) { $display_API_list = "none"; }
 
-
 /* Validate URL List */
 writeLog("Validating URL List",TYPE_DEBUGGING);
 validateURLList();
@@ -829,19 +896,43 @@ validateURLList();
 writeLog("Setting PHP User Agent and Timeouts",TYPE_DEBUGGING);
 initializePHPAgent();
 
+/*  Final Configuration Validate */
+validateConfiguration();
+
+/*  Show Capabilities */
+if (debugMode()) {
+  writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+  showCapabilities(TYPE_VERBOSE);
+  writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+}
+
 /*  Show Configuration Options */
-writeLog("All Lists Loaded:",TYPE_VERBOSE);
-writeLog("-> APIs Loaded: $display_API_list (Source: " . getConfiguration("global","api_list") . ")",TYPE_VERBOSE);
-writeLog("-> Valid Icon Types: " . getValidTypes(),TYPE_VERBOSE);
-writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
-writeLog("Options:",TYPE_VERBOSE);
-writeLog("-> Local Path: '" . getConfiguration("files","local_path") . "'",TYPE_VERBOSE);
-writeLog("-> Global Settings: Icon Size: " . getConfiguration("global","icon_size") . ", Tenacious? " . showBoolean(getConfiguration("global","tenacious")),TYPE_VERBOSE);
-writeLog("-> File Settings: Save? " . showBoolean(getConfiguration("files","store")) . ", Overwrite? " . showBoolean(getConfiguration("files","overwrite")) . ", Remove TLD? " . showBoolean(getConfiguration("files","remove_tld")),TYPE_VERBOSE);
-writeLog("-> HTTP Settings: Buffering? " . showBoolean(getConfiguration("http","use_buffering")) . ", Timeout? " . getConfiguration("http","http_timeout") . ", Connect Timeout? " . getConfiguration("http","http_timeout_connect") . ", DNS Timeout? " . getConfiguration("http","dns_timeout") . ", Try Homepage? " . showBoolean(getConfiguration("http","try_homepage")),TYPE_VERBOSE);
-if (getConfiguration("curl","enabled")) { writeLog("-> cURL is Enabled",TYPE_VERBOSE); } else { writeLog("-> cURL is Disabled",TYPE_VERBOSE); }
-if (getConfiguration("global","api")) { writeLog("-> API Use is Enabled",TYPE_VERBOSE); } else { writeLog("-> API Use is Disabled",TYPE_VERBOSE); }
-writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+$flag_show_config = getConfiguration("global","showconfig");
+if ((isset($options['showconfigonly'])) && (!$flag_show_config)) {
+  writeLog("Show configuration setting of " . showBoolean(getConfiguration("global","showconfig")) . " ignored due to --showconfigonly option",TYPE_NOTICE);
+  $flag_show_config = true;
+}
+   
+if ($flag_show_config) {
+  writeLog("All Lists Loaded:",TYPE_VERBOSE);
+  writeLog("-> APIs Loaded: $display_API_list (Source: " . getConfiguration("global","api_list") . ")",TYPE_VERBOSE);
+  writeLog("-> Valid Icon Types: " . getValidTypes(),TYPE_VERBOSE);
+  writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+  writeLog("Options:",TYPE_VERBOSE);
+  writeLog("-> Local Path: '" . getConfiguration("files","local_path") . "'",TYPE_VERBOSE);
+  writeLog("-> Global Settings: Icon Size: " . getConfiguration("global","icon_size") . ", Tenacious? " . showBoolean(getConfiguration("global","tenacious")) . ", Allow Octet-Stream? " . showBoolean(getConfiguration("global","allow_octet_stream")),TYPE_VERBOSE);
+  writeLog("-> File Settings: Save? " . showBoolean(getConfiguration("files","store")) . ", Overwrite? " . showBoolean(getConfiguration("files","overwrite")) . ", Remove TLD? " . showBoolean(getConfiguration("files","remove_tld")) . ", Check Icons? " . showBoolean(getConfiguration("files","check_local")) . ", Store if New? " . showBoolean(getConfiguration("files","store_if_new")),TYPE_VERBOSE);
+  writeLog("-> HTTP Settings: Use Buffering? " . showBoolean(getConfiguration("http","use_buffering")) . ", Timeout? " . getConfiguration("http","http_timeout") . ", Connect Timeout? " . getConfiguration("http","http_timeout_connect") . ", DNS Timeout? " . getConfiguration("http","dns_timeout") . ", Try Homepage? " . showBoolean(getConfiguration("http","try_homepage")),TYPE_VERBOSE);
+  if (getConfiguration("curl","enabled")) { writeLog("-> cURL is Enabled",TYPE_VERBOSE); } else { writeLog("-> cURL is Disabled",TYPE_VERBOSE); }
+  if (getConfiguration("global","api")) { writeLog("-> API Use is Enabled",TYPE_VERBOSE); } else { writeLog("-> API Use is Disabled",TYPE_VERBOSE); }
+  if (isset($options['showconfigonly'])) { 
+    writeLog("Exiting due to --showconfigonly option",TYPE_NOTICE);
+    exit;
+  } else {
+    writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
+  }
+}
+
 
 /*  Do the Thing */
 addStatistic("process_counter", 0);
@@ -2436,7 +2527,7 @@ function writeLog($message = null,$type = TYPE_ALL,$special = array()) {
     $log_opt_timestamp_format = getConfiguration("logging","timestampformat");
     $log_handle = getGlobal("log_handle");
     $debug_section = getGlobal("debug_section");
-    $consoleMode = getConfiguration("mode","console");      
+    $consoleMode = getConfiguration("mode","console"); 
     
     $flag_write_console = false;
     $flag_write_file = false;
@@ -4091,15 +4182,18 @@ function validateConfiguration() {
   validateConfigurationSetting("global","allow_octet_stream",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","icon_size",CONFIG_TYPE_NUMERIC,RANGE_ICON_SIZE_MINIMUM,RANGE_ICON_SIZE_MAXIMUM);
   validateConfigurationSetting("global","tenacious",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","showconfig",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("console","enabled",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
   validateConfigurationSetting("console","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
   validateConfigurationSetting("debug","dump_structures",CONFIG_TYPE_BOOLEAN);  
+  validateConfigurationSetting("files","check_local",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("files","local_path",CONFIG_TYPE_PATH,DEFAULT_LOCAL_PATH);
   validateConfigurationSetting("files","overwrite",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("files","store",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("files","store_if_new",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("files","remove_tld",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("http","dns_timeout",CONFIG_TYPE_NUMERIC,RANGE_DNS_TIMEOUT_MINIMUM,RANGE_DNS_TIMEOUT_MAXIMUM);
   validateConfigurationSetting("http","http_timeout",CONFIG_TYPE_NUMERIC,RANGE_HTTP_TIMEOUT_MINIMUM,RANGE_HTTP_TIMEOUT_MAXIMUM);
