@@ -17,6 +17,15 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Fixed an issue where the log could be initialized too soon and not honor some settings
+  Image identification fallbacks added to local file loading
+  Added new 'extensions' section to the ini, it's mostly for testing but could be used if something isn't working right.
+    They are all simple boolean values (true or false), the list is:
+      curl, exif, get, put, mbstring, fileinfo, mimetype, gd, imagemagick, gmagick, hrtime
+      If an extension is listed as true in this section but is not loaded or available, it will change to false.
+  Added --sites as an alternate to --list
+  Added raw datacheck for most common icon formats
+  Added a "confidence" level, not used yet
   Initial work for processing parameters in HTML mode created (completely untested)
   Added --checklocal/--nochecklocal/--storeifnew (requires --checklocal and --store)
     These do not do anything yet.
@@ -86,6 +95,7 @@ NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
 TO DO:
 -------------------------------------
+  Option to be more careful about chopping off subdomains
   HTML rendering overhaul
     create a master CSS (still all in one "document")
     create more formatting variables
@@ -279,7 +289,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306071311');
+define('PROGRAM_BUILD', '202306121848');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -325,6 +335,14 @@ define('DEFAULT_VALID_EXTENSIONS', "gif,webp,png,ico,bmp,svg,jpg");
 define('DEFAULT_SHOW_RUNNING_CONFIGURATION', true);
 define('DEFAULT_PROTOCOL_IS_HTTPS', true);
 define('DEFAULT_FALLBACK_IF_HTTPS_NOT_AVAILABLE', true);
+define('DEFAULT_ACCEPTABLE_DATA_CONFIDENCE', 75);
+
+/*  Data Confidence */
+define('CONFIDENCE_CERTAIN', 95);
+define('CONFIDENCE_HIGH', 80);
+define('CONFIDENCE_MEDIUM', 60);
+define('CONFIDENCE_LOW', 40);
+define('CONFIDENCE_UNCERTAIN', 0);
 
 /*  Ranges */
 define('RANGE_HTTP_TIMEOUT_MINIMUM', 0);
@@ -403,6 +421,17 @@ define('PHP_OPTION_MAX_EXECUTION_TIME', "max_execution_time");
 define('PHP_OPTION_USER_AGENT', "user_agent");
 define('PHP_OPTION_DEFAULT_SOCKET_TIMEOUT', "default_socket_timeout");
 
+/*  Image Format Markers */
+define('MAGIC_BMP', "BM");
+define('MAGIC_GIF_STRING87', "GIF87a");
+define('MAGIC_GIF_STRING89', "GIF89a");
+define('MAGIC_JPG', 3774863615);
+define('MAGIC_JPG_STRING', "JFIF");
+define('MAGIC_PNG', 727905341920923785);
+define('MAGIC_RIFF_STRING', "RIFF");
+define('MAGIC_WEBP_STRING', "WEBP");
+define('MAGIC_VP8_STRING', "VP8");
+
 /*
 **  Initialize Arrays and Flags
 */
@@ -424,6 +453,7 @@ $log_handle = null;
 
 /* Start Initializing */
 startTimer("program");
+setItem("suppress_logfile", true);
 setItem("project_name",PROJECT_NAME);
 setItem("program_name",PROGRAM_NAME);
 setItem("program_version",PROGRAM_MAJOR_VERSION . "." . PROGRAM_MINOR_VERSION . " (" . PROGRAM_BUILD . ")");
@@ -439,13 +469,14 @@ determineCapabilities();
 ** setConfiguration($scope,$option,$value,$default,$type)
 */
 
-if (getCapability("php","fileinfo") || getCapability("php","mimetype")) {
+if (getConfiguration("extensions","fileinfo") || getConfiguration("extensions","mimetype")) {
   setConfiguration("global","allow_octet_stream",DEFAULT_ALLOW_OCTET_STREAM_IF_FILEINFO_OR_MIMETYPE);
 } else {
   setConfiguration("global","allow_octet_stream",DEFAULT_ALLOW_OCTET_STREAM);
 }
 
 setConfiguration("global","debug",false);
+setConfiguration("global","acceptable_data_confidence",DEFAULT_ACCEPTABLE_DATA_CONFIDENCE);
 setConfiguration("global","api",DEFAULT_ENABLE_APIS);
 setConfiguration("global","blocklist",DEFAULT_ENABLE_BLOCKLIST);
 setConfiguration("global","icon_size",DEFAULT_SIZE);
@@ -457,7 +488,7 @@ setConfiguration("console","enabled",DEFAULT_LOG_CONSOLE_ENABLED);
 setConfiguration("console","level",DEFAULT_LOG_LEVEL_CONSOLE);
 setConfiguration("console","timestamp",DEFAULT_LOG_TIMESTAMP_CONSOLE);
 setConfiguration("console","timestampformat",DEFAULT_LOG_TIMESTAMP_FORMAT);
-setConfiguration("curl","enabled",getCapability("php","curl"));
+setConfiguration("curl","enabled",getConfiguration("extensions","curl"));
 setConfiguration("curl","verbose",false);
 setConfiguration("curl","showprogress",false);
 setConfiguration("files","check_local",DEFAULT_CHECKLOCAL);
@@ -553,6 +584,7 @@ if (getConfiguration("mode","console")) {
   $longopts  = array(
     "logfile::",
     "list::",
+    "sites::",
     "blocklist::",
     "path::",
     "config::",
@@ -712,6 +744,7 @@ if (getConfiguration("mode","console")) {
   if (isset($options['config'])) { $options['configfile'] = $options['config']; }
   if (isset($options['apiconfig'])) { $options['apiconfigfile'] = $options['apiconfig']; }
   if (isset($options['c'])) { $options['configfile'] = $options['c']; }
+  if (isset($options['sites'])) { $options['list'] = $options['sites']; } 
   if (isset($options['save'])) { $options['store'] = $options['save']; } 
   if (isset($options['saveifnew'])) { $options['storeifnew'] = $options['saveifnew']; } 
   if (isset($options['nosave'])) { $options['nostore'] = $options['nosave']; } 
@@ -810,12 +843,17 @@ if (getConfiguration("mode","console")) {
       /*  Configuration Validate */
       validateConfiguration();  
     }
-    
   }
-
 }
 
-/*  Start Logging (Console/HTML/File) */
+/*
+**
+**  Begin Logging
+**    Console and/or File
+**
+*/
+
+setItem("suppress_logfile", false);
 writeLog(getItem("banner"),TYPE_ALL);
 writeLog(getItem("copyright"),TYPE_ALL);
 writeLog("PHP Version: " . getCapability("php","version"),TYPE_VERBOSE);
@@ -823,8 +861,8 @@ if (debugMode()) { writeLog("Running Debug Mode",TYPE_VERBOSE); }
 if (isset($options['silent'])) { if (getConfiguration("mode","console")) { writeLog("Console Output Has Been Disabled",TYPE_NOTICE); } }
 
 /*  Warn If Capabilities Are Too Weak or Broken */
-if ((!getCapability("php","exif")) && (!getCapability("php","fileinfo")) && (!getCapability("php","mimetype"))) { writeLog("Your PHP installation is reporting exif, fileinfo and mimetype as unavailable, results will be impaired.",TYPE_WARNING); }
-if ((!getCapability("php","curl")) && (!getCapability("php","get"))) { if (!ini_get(PHP_OPTION_ALLOW_URL_FOPEN)) { writeLog("Your PHP installation is does not have cURL or file_get_contents avaialble and the PHP option '" . PHP_OPTION_ALLOW_URL_FOPEN . "' is disabled, web access is essentially disabled.",TYPE_WARNING); } }
+if ((!getConfiguration("extensions","exif")) && (!getConfiguration("extensions","fileinfo")) && (!getConfiguration("extensions","mimetype"))) { writeLog("Your configuration or PHP installation is reporting exif, fileinfo and mimetype as unavailable, results will be impaired.",TYPE_WARNING); }
+if ((!getConfiguration("extensions","curl")) && (!getConfiguration("extensions","get"))) { if (!ini_get(PHP_OPTION_ALLOW_URL_FOPEN)) { writeLog("Your configuration or PHP installation does not have cURL or file_get_contents avaialble and the PHP option '" . PHP_OPTION_ALLOW_URL_FOPEN . "' is disabled, web access is essentially disabled.",TYPE_WARNING); } }
             
 /*  
 **  Process Lists
@@ -932,7 +970,6 @@ if ($flag_show_config) {
     writeLog(getConfiguration("logging","short_separator"),TYPE_VERBOSE);
   }
 }
-
 
 /*  Do the Thing */
 addStatistic("process_counter", 0);
@@ -1398,8 +1435,10 @@ function grap_favicon($url) {
               $fileExtension = $fileData['extension'];
               $fileContentType = $fileData['content_type'];
               $fileMethod = $fileData['method'];
+              $fileConfidence = $fileData['confidence'];
               updateProcessEntry($url,"icontype",$fileContentType);
               updateProcessEntry($url,"hash",$content_hash);
+              updateProcessEntry($url,"confidence",$fileConfidence);
               
               writeLog("Icon Is Valid ('$favicon'), ext=$fileExtension, type=$fileContentType, id_method=$fileMethod, method=$method",TYPE_DEBUGGING);
 
@@ -1586,8 +1625,19 @@ function lookupHTTPResponse($code = null) {
 
 /*  Adds the favicon path to the URL */
 function addFavIconToURL($url) {
-  if(!strrev($url)[0] === '/') { $url .= "/"; }
-  $url .= URL_PATH_FAVICON;
+  debugSection("addFavIconToURL");
+  if (is_string($url)) {
+    if (strlen($url) > 0) {
+      $temp = strrev($url);
+      if (substr($temp,0,1) != "/") { $url .= "/"; }
+      $url .= URL_PATH_FAVICON;
+    } else {
+      writeLog("URL is " . strlen($url) . ") bytes long!",TYPE_TRACE);
+    }
+  } else {
+    writeLog("URL is type (" . gettype($url) . ") instead of string!",TYPE_TRACE);
+  }
+  debugSection();
   return $url;
 }
 
@@ -1610,6 +1660,7 @@ function load($url) {
     $previous_url = getGlobal('redirect_url');
     $protocol = parse_url($url,PHP_URL_SCHEME);
     $protocol_id = null;  
+    $redirect_url = null;
     $redirect = getGlobal('redirect_count');
     if (!isset($redirect)) { $redirect = 0; }
     $flag_skip_loadlastresult = false;
@@ -1654,36 +1705,12 @@ function load($url) {
           if (!empty($curl_response)) {
             if (isset($curl_response['content_type'])) { $content_type = $curl_response['content_type']; }
             if (isset($curl_response['http_code'])) { $http_code = $curl_response['http_code']; }
-            if (isset($curl_response['url'])) { $curl_url = $curl_response['url']; }
+            if (isset($curl_response['url'])) { $redirect_url = $curl_response['url']; }
             if (isset($curl_response['scheme'])) { $protocol = $curl_response['scheme']; }
             if (isset($curl_response['protocol'])) { $protocol_id = $curl_response['protocol']; }
             if (is_null($protocol)) { $protocol = parse_url($url,PHP_URL_SCHEME); }
-            $RequestData = lookupHTTPResponse($http_code);
-            writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
             curl_close($ch);
             unset($ch);
-            if (is_null($content)) { writeLog("$method: No content received '$url'",TYPE_TRACE); }
-            if (is_null($http_code)) {
-              writeLog("$method: No HTTP return code received for '$url'",TYPE_TRACE);
-            } else {
-              if ($RequestData['type'] == HTTP_RESPONSE_TYPE_REDIRECT) {
-                if (!is_null($curl_url)) {
-                  $redirect++;
-                  if ($redirect < getConfiguration("http","maximum_redirects"))
-                  {
-                    writeLog("$method: Redirecting to '$curl_url' from '$url' (# $redirect)",TYPE_TRACE);
-                    setGlobal('redirect_count',$redirect);
-                    setGlobal('redirect_url',$curl_url);
-                    $content = load($curl_url);
-                    $flag_skip_loadlastresult = true;
-                  } else {
-                    writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
-                  }
-                } else {
-                  writeLog("$method: Got redirect response from server but no URL provided",TYPE_TRACE);
-                }
-              }
-            }
           } else {
             writeLog("$method: No response from cURL",TYPE_TRACE);
           }
@@ -1699,10 +1726,10 @@ function load($url) {
           )
         );
         $context = stream_context_create($context_options);
-        if (!getCapability("php","get")) {
+        if (!getConfiguration("extensions","get")) {
           writeLog("$method: attempting to load '$url'",TYPE_TRACE);
           if (ini_get(PHP_OPTION_ALLOW_URL_FOPEN)) {
-            $fh = fopen($url, 'r', false, $context);
+            $fh = @fopen($url, 'r', false, $context);
             if ($fh) {
               $content = "";
               while (!feof($fh)) {
@@ -1734,10 +1761,48 @@ function load($url) {
             $http_code = end($matches[1]);
           }
         }
-        $RequestData = lookupHTTPResponse($http_code);
-        writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
       }
-      $content_type = getMIMEType($content);
+      
+      # Common
+      $RequestData = lookupHTTPResponse($http_code);
+      writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
+      if (is_null($http_code)) {
+        writeLog("$method: No HTTP return code received for '$url'",TYPE_TRACE);
+      } else {
+        if ($RequestData['type'] == HTTP_RESPONSE_TYPE_REDIRECT) {
+          if (!is_null($redirect_url)) {
+            $redirect++;
+            if ($redirect < getConfiguration("http","maximum_redirects"))
+            {
+              writeLog("$method: Redirecting to '$redirect_url' from '$url' (# $redirect)",TYPE_TRACE);
+              setGlobal('redirect_count',$redirect);
+              setGlobal('redirect_url',$redirect_url);
+              $content = load($redirect_url);
+              $flag_skip_loadlastresult = true;
+            } else {
+              writeLog("$method: Too many redirects ($redirect)",TYPE_TRACE);
+            }
+          } else {
+            writeLog("$method: Got redirect response from server but no URL provided",TYPE_TRACE);
+          }
+        } elseif ($RequestData['type'] == HTTP_RESPONSE_TYPE_CLIENT_ERROR) {
+          writeLog("Server for '$url' Responded With '" . $RequestData['description'] . "' (" . $RequestData['code'] . ")",TYPE_WARNING);
+        } elseif ($RequestData['type'] == HTTP_RESPONSE_TYPE_SERVER_ERROR) {
+          writeLog("Server for '$url' Responded With '" . $RequestData['description'] . "' (" . $RequestData['code'] . ")",TYPE_ERROR);
+        }
+      }        
+      if (is_null($content)) {
+        writeLog("$method: No content received '$url'",TYPE_TRACE);
+        $content_type = null;
+      } else {
+        if (!is_null($content_type)) { if (!is_string($content_type)) { writeLog("$method: content_type is not a string (type=" . gettype($content_type) . ")" ,TYPE_TRACE); $content_type = null; }  }
+        if (is_null($content_type)) {
+          writeLog("$method: content_type is reported null, attempting to determine",TYPE_TRACE);
+        } else {
+          writeLog("$method: content_type is reported as $content_type, attempting to verify",TYPE_TRACE);
+        }
+        $content_type = getMIMEType($content);
+      }
       if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
     } else {
       writeLog("Using buffered result for url='$url'",TYPE_TRACE);
@@ -1767,7 +1832,7 @@ function loadLocalFile($pathname) {
       writeLog("No pathname given",TYPE_TRACE);
     } else {
       if (file_exists($pathname)) {
-        if (!getCapability("php","get")) {
+        if (!getConfigurationty("extensions","get")) {
           $fh = fopen($pathname, 'r', false);
           if ($fh) {
             $content = "";
@@ -1798,26 +1863,29 @@ function loadLocalFile($pathname) {
 
 /*  Get MIME Type based on data */
 function getMIMEType($data) {
+  debugSection("getMIMEType");
   $content_type = null;
   if (!is_null($data)) {
     if (is_null($content_type)) {
-      if (getCapability("php","fileinfo")) {
+      if (getConfiguration("extensions","fileinfo")) {
         $finfo = new finfo(FILEINFO_MIME_TYPE);
         $content_type = $finfo->buffer($data);    
       }
     }
   }
+  debugSection();
   return $content_type;
 }
 
 /*  Get MIME Type from URL */
 function getMIMETypeFromURL($url) {
+  debugSection("getMIMETypeFromURL");
   $content_type = null;
   $content = null;
   if (!is_null($url)) {
     if (is_string($url)) {
-      if (!getCapability("php","get")) {
-        $fh = fopen($url, 'r', false);
+      if (!getConfiguration("extensions","get")) {
+        $fh = @fopen($url, 'r', false);
         if ($fh) {
           $content = '';
           while (!feof($fh)) {
@@ -1832,45 +1900,338 @@ function getMIMETypeFromURL($url) {
       }
       if (!is_null($content)) {
         if (is_null($content_type)) {
-          if (getCapability("php","fileinfo")) {
-            $content_type = getMIMEType($content);
-          }
+          $content_type = getMIMEType($content);
         }
       }         
     }
   }
+  debugSection();
   return $content_type;  
 }
 
 /*  Get MIME Type from a File */
 function getMIMETypeFromFile($pathname) {
+  debugSection("getMIMETypeFromFile");
   $content_type = null;
-  if (!is_null($pathname)) {
+  $confidence = 0;
+  if (is_string($pathname)) {
     if (file_exists($pathname)) {
       if (is_null($content_type)) {
-        if (getCapability("php","fileinfo")) {
+        if (getConfiguration("extensions","fileinfo")) {
           $finfo = new finfo(FILEINFO_MIME_TYPE);
           $content_type = $finfo->file($pathname);
+          if (!is_null($content_type)) { $confidence = CONFIDENCE_CERTAIN; }
+          $method = "fileinfo";
         }
       }      
       if (is_null($content_type)) {
-        if (getCapability("php","mime_content_type")) {
+        if (getConfiguration("extensions","mime_content_type")) {
           $content_type = mime_content_type($pathname);
+          if (!is_null($content_type)) { $confidence = CONFIDENCE_HIGH; }
+          $method = "mimetype";
         }
       }    
+      if (is_null($content_type)) {
+        if (getConfiguration("extensions","exif")) {
+          $fileCheck = getMIMETypeUsingEXIF($pathname);
+          $content_type = $fileCheck['content_type'];
+          $confidence = $fileCheck['confidence'];
+          $method = $fileCheck['method'];
+        }
+      }
+      if (is_null($content_type)) {
+        if (!getConfiguration("extensions","get")) {
+          $fh = fopen($pathname, 'r', false);
+          if ($fh) {
+            $buffer = '';
+            while (!feof($fh)) {
+              $buffer .= fread($fh, BUFFER_SIZE);
+            }
+            fclose($fh);
+          } else {
+            writeLog("Failed to open '$pathname'",TYPE_TRACE);
+          }
+        } else {
+          $buffer = @file_get_contents($pathname, false);
+        }        
+        $fileCheck = getMIMETypeFromBinary($buffer);
+        $content_type = $fileCheck['content_type'];
+        $confidence = $fileCheck['confidence'];
+        $method = $fileCheck['method'];
+      }
+      if (!is_null($content_type)) {
+        if (!is_string($content_type)) {
+          $content_type = null;
+          $confidence = 0;
+        }
+      }
+      if (is_null($content_type)) {
+        writeLog("pathname='$pathname', content_type=null, confidence=" . getConfidenceText($confidence) . ", method=none",TYPE_TRACE);  
+      } else {
+        writeLog("pathname='$pathname', content_type=$content_type, confidence=" . getConfidenceText($confidence) . ", method=$method",TYPE_TRACE);          
+      }
+    } else {
+      writeLog("'$pathname' does not exist",TYPE_TRACE);
     }
+  } else {
+    writeLog("pathname is not a string (type=" . gettype($pathname) . ")",TYPE_TRACE);
   }
+  debugSection();
   return $content_type;
 }
 
 function getMIMETypeFromBinary($buffer) {
+  debugSection("getMIMETypeFromBinary");
   $content_type = null;
+  $confidence = 0;
+  $method = "none";
   if (!is_null($buffer)) {
-    if (is_string($buffer))
-    {
+    if (is_string($buffer)) {
+      if (strlen($buffer) > 2) {
+        writeLog("Data Stream Meets Minimum Requirements",TYPE_TRACE);
+        
+        if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
+          // WEBP
+          if (strlen($buffer) >= 16) {
+            writeLog("Checking Format: WEBP",TYPE_TRACE);
+            if (substr($buffer,0,4) == MAGIC_RIFF_STRING) {
+              $content_type = "image/webp";
+              $confidence = CONFIDENCE_LOW;
+              if (substr($buffer,8,4) == MAGIC_WEBP_STRING) {
+                $confidence = CONFIDENCE_MEDIUM;
+                if (substr($buffer,12,3) == MAGIC_VP8_STRING) {
+                  $confidence = CONFIDENCE_CERTAIN;
+                  $method = "signature";
+                }
+              }
+            }
+          }
+        }
+        
+        //  JPEG
+        if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
+          if (strlen($buffer) >= 10) {
+            writeLog("Checking Format: JPEG",TYPE_TRACE);
+            $value = unpack("V",substr($buffer,0,4));
+            if (isset($value[1])) {
+              if (is_numeric($value[1])) {
+                if ($value[1] == MAGIC_JPG) {
+                 if (substr($buffer,6,4) == MAGIC_JPG_STRING) {
+                   $content_type = "image/jpeg";
+                   $confidence = CONFIDENCE_CERTAIN;
+                   $method = "signature";
+                 }
+                }
+              }
+            }
+          }
+        }
+        
+        // PNG
+        if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
+          if (strlen($buffer) >= 8) {
+            writeLog("Checking Format: PNG",TYPE_TRACE);
+            $value = unpack("P",substr($buffer,0,8));
+            if (isset($value[1])) {
+              if (is_numeric($value[1])) {
+                if ($value[1] == MAGIC_PNG) {
+                  $content_type = "image/png";
+                  $confidence = CONFIDENCE_CERTAIN;
+                  $method = "signature";
+                }
+              }
+            }
+          }
+        }
+
+        // GIF
+        if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
+          if (strlen($buffer) >= 6) {
+            writeLog("Checking Format: GIF",TYPE_TRACE);
+            if (substr($buffer,0,6) == MAGIC_GIF_STRING87) {
+              $content_type = "image/gif";
+              $confidence = CONFIDENCE_CERTAIN;
+              $method = "signature";
+            }
+            if (substr($buffer,0,6) == MAGIC_GIF_STRING89) {
+              $content_type = "image/gif";
+              $confidence = CONFIDENCE_CERTAIN;
+              $method = "signature";
+            }
+          }
+        }
+        
+        // BMP
+        if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
+          if (strlen($buffer) >= 6) {
+            writeLog("Checking Format: BMP",TYPE_TRACE);
+            if (substr($buffer,0,2) == MAGIC_BMP) {
+              $value = unpack("V",substr($buffer,2,4));
+              $content_type = "image/bmp";
+              $confidence = CONFIDENCE_MEDIUM;
+              if (isset($value[1])) {
+                if (is_numeric($value[1])) {
+                  if ($value[1] == strlen($buffer)) {
+                    $confidence = CONFIDENCE_CERTAIN;
+                    $method = "signature";
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        //  ICO
+        if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
+          if (strlen($buffer) >= 6) {
+            writeLog("Checking Format: ICO",TYPE_TRACE);
+            $value = unpack("v",substr($buffer,0,2));
+            if (isset($value[1])) {
+              if (is_numeric($value[1])) {
+                if ($value[1] == 0) {
+                  $value = unpack("v",substr($buffer,2,2));
+                  if (isset($value[1])) {
+                    if ($value[1] == 1) {
+                      $value = unpack("v",substr($buffer,4,2));
+                      if ($value > 0) {
+                        $content_type = "image/x-icon";
+                        $confidence = CONFIDENCE_HIGH;
+                        $method = "markers";
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        //  OTHER
+        if (is_null($content_type)) {
+          $flag_binary = false;
+          if (getConfiguration("extensions","mbstring")) {
+            writeLog("Using mbstring to determine content type",TYPE_TRACE);
+            $method = "mb_detect_encoding";
+            if (mb_detect_encoding($buffer) == "ASCII") {
+              $content_type = "text/plain";
+              $confidence = CONFIDENCE_HIGH;
+            } else {
+              $content_type = "application/octet-stream";
+              $confidence = CONFIDENCE_HIGH;
+            }
+          } else {
+            writeLog("Using alternate method to determine content type",TYPE_TRACE);
+            $pointer = 0;
+            $flag_loop = true;
+            $flag_binary = false;
+            $confidence = CONFIDENCE_HIGH;
+            $content_type = "text/plain";
+            $method = "bytecheck";
+            do {
+              $value = @unpack("C",substr($buffer,$pointer,1));
+              if ($value === false) {
+                # Error Unpacking
+              } else {
+                if (isset($value[1])) {
+                  if (is_numeric($value[1])) {
+                    if ($value[1] > 127) {
+                      $flag_binary = true;
+                      $flag_loop = false;
+                    }
+                  }
+                }
+              }
+              $pointer++;
+              if ($pointer >= strlen($buffer)) {
+                $flag_loop = false;
+              }
+            } while ($flag_loop);
+            if ($flag_binary) {
+              $content_type = "application/octet-stream";
+            }           
+          }
+        }
+        
+        # TO DO:
+        #   SVG
+        if ($content_type == "text/plain") {
+        }
+      }
     }
   }
-  return $content_type;
+  if (is_null($content_type)) {
+    writeLog("Unable to discover content_type",TYPE_TRACE);
+  } else {
+    writeLog("Identified as $content_type with $confidence % confidence using method: $method",TYPE_TRACE);
+  }
+  $retval['content_type'] = $content_type;
+  $retval['confidence'] = $confidence;
+  $retval['method'] = $method;
+  debugSection();
+  return $retval;
+}
+
+function getMIMETypeUsingEXIF($pathname = null) {
+  debugSection("getMIMETypeUsingEXIF");
+  $content_type = null;
+  $confidence = 0;
+  $method = "none";
+  if (getConfiguration("extensions","exif")) {
+    $phpUA = ini_get(PHP_OPTION_USER_AGENT);
+    $timeout = ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT);
+    $method = "exif";
+    writeLog("WARNING: exif_imagetype is sometimes refused access to an icon.",TYPE_TRACE);
+    if (!is_null($pathname)) {
+      if (is_string($pathname)) {
+        writeLog("pathname='$pathname', method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+        $filetype = @exif_imagetype($pathname);
+        if (!is_null($filetype)) {
+          if (function_exists("image_type_to_mime_type")) {
+            $method = "exif:image_type_to_mime_type";
+            $content_type = image_type_to_mime_type($filetype);
+          } else {
+            switch ($filetype) {
+              case IMAGETYPE_GIF:
+                $content_type = "image/gif";
+                break;
+              case IMAGETYPE_JPEG:
+                $content_type = "image/jpeg";
+                break;
+              case IMAGETYPE_PNG:
+                $content_type = "image/png";
+                break;
+              case IMAGETYPE_ICO:
+                $content_type = "image/x-icon";
+                break;
+              case IMAGETYPE_WEBP:
+                $content_type = "image/webp";
+                break;
+              case IMAGETYPE_BMP:
+                $content_type = "image/bmp";
+                break;
+              default:
+                $content_type = null;
+                $file_extension = null;
+            }
+          }
+          if (!is_null($content_type)) {
+            $file_extension = lookupExtensionByMIME($content_type);
+            $confidence = CONFIDENCE_CERTAIN;
+          } 
+        }
+      } else {
+        writeLog("pathname=invalid (" . gettype($pathname) . "), method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+      }
+    } else {
+      writeLog("pathname=null, method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+    }
+  } else {
+  }
+  $retval['content_type'] = $content_type;
+  $retval['confidence'] = $confidence;
+  $retval['method'] = $method;  
+  debugSection();
+  return $retval;
 }
 
 /* HELPER: Change URL from relative to absolute */
@@ -1889,9 +2250,15 @@ function convertRelativeToAbsolute($rel, $base) {
 
 /*  Content Type Lookups */
 function lookupExtensionByMIME($content_type = null) {
+  debugSection("lookupExtensionByMIME");
   $file_extension = null;
   if (!is_null($content_type)) {
+    $content_type = strtolower($content_type);
+    writeLog("Searching for match of $content_type",TYPE_TRACE);
     switch ($content_type) {
+      case "image/ico":
+        $file_extension = "ico";
+        break;      
       case "image/x-icon":
         $file_extension = "ico";
         break;
@@ -1927,13 +2294,16 @@ function lookupExtensionByMIME($content_type = null) {
         break;
     }
   }
+  debugSection();
   return $file_extension;
 }
 
 function lookupContentTypeByExtension($extension = null) {
+  debugSection("lookupContentTypeByExtension");
   $content_type = null;
   if (!is_null($extension)) {
     $extension = strtolower($extension);
+    writeLog("Searching for match of $extension",TYPE_TRACE);
     switch ($extension) {
       case "gif":
         $content_type = "image/gif";
@@ -1970,6 +2340,7 @@ function lookupContentTypeByExtension($extension = null) {
         break;
     }
   }
+  debugSection();
   return $content_type;
 }
 
@@ -1987,6 +2358,9 @@ function getIconExtension($url, $noFallback = false) {
   $method = null;
   $http_code = null;
   $is_valid = false;
+  $confidence = 0;
+  $width = -1;
+  $height = -1;
   $reason = "not set";
   if (!is_null($url)) {
     if (is_string($url)) {
@@ -1997,6 +2371,13 @@ function getIconExtension($url, $noFallback = false) {
           $RequestData = lookupHTTPResponse($http_code);
           if ($RequestData['ok']) {
             $content_type = getLastLoadResult("content_type");
+            
+            # Debug
+            if (is_array($content_type)) {
+              writeLog("url='$url', last load contains content_type is an array!!!",TYPE_TRACE);
+              var_dump($content_type);
+            }
+            
             if (is_null($content_type)) {
               writeLog("url='$url', last load contains content_type: null",TYPE_TRACE);
             } else {
@@ -2026,12 +2407,16 @@ function getIconExtension($url, $noFallback = false) {
           if (is_null($content_type)) {
             $method = "getMIMEType";
             $content_type = getMIMEType($content);
-            writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+            if (!is_null($content_type)) {
+              $confidence = CONFIDENCE_CERTAIN;
+              writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+            }
           }
           if (!is_null($content_type)) {
             if ($content_type == "application/octet-stream") {
               $method = "getMIMEType";
               $content_type = getMIMEType($content);
+              $confidence = CONFIDENCE_CERTAIN;
               writeLog("url='$url', method=$method, content-type=$content_type; (was application/octet-stream)",TYPE_TRACE);
             }
           }
@@ -2063,42 +2448,16 @@ function getIconExtension($url, $noFallback = false) {
             }
           }
           if (is_null($content_type)) {
-            if (getCapability("php","exif")) {
-              $phpUA = ini_get(PHP_OPTION_USER_AGENT);
-              $timeout = ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT);
-              $method = "exif";
-              writeLog("WARNING: exif_imagetype is sometimes refused access to an icon.",TYPE_TRACE);
-              writeLog("url='$url', method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
-              $filetype = @exif_imagetype($url);
-              if (!is_null($filetype)) {
-                if (function_exists("image_type_to_mime_type")) {
-                  $content_type = image_type_to_mime_type($filetype);
-                } else {
-                  switch ($filetype) {
-                    case IMAGETYPE_GIF:
-                      $content_type = "image/gif";
-                      break;
-                    case IMAGETYPE_JPEG:
-                      $content_type = "image/jpeg";
-                      break;
-                    case IMAGETYPE_PNG:
-                      $content_type = "image/png";
-                      break;
-                    case IMAGETYPE_ICO:
-                      $content_type = "image/x-icon";
-                      break;
-                    case IMAGETYPE_WEBP:
-                      $content_type = "image/webp";
-                      break;
-                    case IMAGETYPE_BMP:
-                      $content_type = "image/bmp";
-                      break;
-                    default:
-                      $content_type = null;
-                      $file_extension = null;
-                  }
-                }
-                if (!is_null($content_type)) {  $file_extension = lookupExtensionByMIME($content_type); }
+            if (getConfiguration("extensions","exif")) {
+              $fileCheck = getMIMETypeUsingEXIF($url);
+              $content_type = $fileCheck['content_type'];
+              $confidence = $fileCheck['confidence'];
+              $method = $fileCheck['method'];
+              if (is_null($content_type)) {
+                writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
+              } else {
+                writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+                $file_extension = lookupExtensionByMIME($content_type);
               }
             }
           }
@@ -2106,10 +2465,16 @@ function getIconExtension($url, $noFallback = false) {
         if (is_null($file_extension)) {
           if (!$noFallback) {
             $method = "datacheck";
-            writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
-            # TO DO:
-            #   data is in $content
-            #   check for format markers
+            $fileCheck = getMIMETypeFromBinary($content);
+            $content_type = $fileCheck['content_type'];
+            $confidence = $fileCheck['confidence'];
+            $method = $method . ":" . $fileCheck['method'];
+            if (is_null($content_type)) {
+              writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
+            } else {
+              writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+              $file_extension = lookupExtensionByMIME($content_type);
+            }
           }
         }
         if (is_null($file_extension)) {
@@ -2130,6 +2495,7 @@ function getIconExtension($url, $noFallback = false) {
         if (is_null($content_type)) {
           if (!is_null($file_extension)) {
             $content_type = guessContentType($file_extension);
+            $confidence = CONFIDENCE_MEDIUM;
             $reason = "content type is a guess";
           }
         }
@@ -2145,13 +2511,34 @@ function getIconExtension($url, $noFallback = false) {
     writeLog("URL is null",TYPE_TRACE);
     $reason = "URL was null";
   }
-  if ($is_valid) { $reason = "accepted"; }
+  
+  if ($is_valid) {
+    $reason = "accepted";
+    if (!is_null($url)) {
+      if (is_string($url)) {
+        $data = @getimagesize($url);
+        if (!is_null($data)) {
+          if (!empty($data)) {
+            if (isset($data[0])) { if (is_numeric($data[0])) { $width = $data[0]; } }
+            if (isset($data[1])) {  if (is_numeric($data[1])) { $height = $data[1]; } }
+            if (isset($data['mime'])) { if (!is_null($content_type)) { $content_type = $data['mime']; } }
+          }
+        }
+      }
+    }
+  }
+
   $retval = array();
   $retval['valid'] = $is_valid;
   $retval['extension'] = $file_extension;
   $retval['content_type'] = $content_type;
   $retval['method'] = $method;
   $retval['reason'] = $reason;
+  $retval['width'] = $width;
+  $retval['height'] = $height;
+  $retval['wXh'] = $width . "x" . $height;
+  $retval['confidence'] = $confidence;
+  
   debugSection();
   return $retval;
 }
@@ -2241,6 +2628,8 @@ function validateIconByHash($hash) {
 function validateIcon($iconfile, $removeIfInvalid = false) {
   debugSection("validateIcon");
   $retval = true;
+  # TO DO:
+  #   if size data is available, reject if invalid
   
   # use load, will load via url or locally
   #   md5 hash should be present, call validateIconByHash
@@ -2400,7 +2789,7 @@ function getFileAsBase64($filePath) {
   } else {
     if (file_exists($filePath)) {
       $content = null;
-      if (!getCapability("php","get")) {
+      if (!getConfiguration("extensions","get")) {
         $fh = @fopen($filePath, 'r');
         if ($fh) {
           while (!feof($fh)) {
@@ -2454,49 +2843,56 @@ function debugMode() {
 /*  Also acts to see if logging (console and/or file) is enabled */
 function initializeLogFile() {
   $retval = false;
-  $log_enabled = getConfiguration("logging","enabled");
-  if ($log_enabled) {
-    $log_opt_append = getConfiguration("logging","append");
-    $log_pathname = getConfiguration("logging","pathname");
-    $log_separator = getConfiguration("logging","separator");
-    $flag_init = getGlobal("flag_log_initialized");
-    if (!isset($flag_init)) { $flag_init = 0; }
-    if ($flag_init) {
-      $retval = true;
-    } else {
-      if (is_null($log_pathname)) {
-        setConfiguration("logging","enabled",false);
+  if (getItem("suppress_logfile")) {
+    /*  File Logging is Suppressed */
+    if (getConfiguration("console","enabled")) { $retval = true; }
+  } else {
+    $log_enabled = getConfiguration("logging","enabled");
+    if ($log_enabled) {
+      $log_opt_append = setBoolean(getConfiguration("logging","append"));
+      $log_pathname = getConfiguration("logging","pathname");
+      $log_separator = getConfiguration("logging","separator");
+      $flag_init = getGlobal("flag_log_initialized");
+      if (!isset($flag_init)) { $flag_init = 0; }
+      if ($flag_init) {
+        $retval = true;
       } else {
-        $flag_open_append = false;
-        $log_write_separator = false;
-        if (file_exists($log_pathname)) {
-          if ($log_opt_append) {
-            $flag_open_append = true;
-          }
-        }
-        if ($flag_open_append) {
-          $log_handle = @fopen($log_pathname, 'a+');
-          $log_write_separator = true;
-        } else {
-          $log_handle = @fopen($log_pathname, 'w+');
-        }
-        if (is_null($log_handle)) { 
+        if (is_null($log_pathname)) {
           setConfiguration("logging","enabled",false);
         } else {
-          setGlobal("flag_log_initialized",1);
-          setGlobal("log_handle",$log_handle);
-          $retval = true;
-          if ($log_write_separator) {
-            if (fwrite($log_handle, "$log_separator\n") === false) {
-              setConfiguration("logging","enabled",false);
-            } 
+          $flag_open_append = false;
+          $log_write_separator = false;
+          if (file_exists($log_pathname)) {
+            if ($log_opt_append) { 
+              $flag_open_append = true;
+            }
+          }
+          if ($flag_open_append) {
+            $log_handle = @fopen($log_pathname, 'a+');
+            $log_write_separator = true;
+            echo "APPEND: " . showBoolean($log_opt_append) . ", " . showBoolean($flag_open_append) . ", " . showBoolean(getConfiguration("logging","append")) . "\n";
+            
+          } else {
+            $log_handle = @fopen($log_pathname, 'w+');
+          }
+          if (is_null($log_handle)) { 
+            setConfiguration("logging","enabled",false);
+          } else {
+            setGlobal("flag_log_initialized",1);
+            setGlobal("log_handle",$log_handle);
+            $retval = true;
+            if ($log_write_separator) {
+              if (fwrite($log_handle, "$log_separator\n") === false) {
+                setConfiguration("logging","enabled",false);
+              } 
+            }
           }
         }
       }
     }
-  }
-  if (getConfiguration("logging","enabled")) { $retval = true; }
-  if (getConfiguration("console","enabled")) { $retval = true; }
+    if (getConfiguration("logging","enabled")) { $retval = true; }
+    if (getConfiguration("console","enabled")) { $retval = true; }
+  }  
   return $retval;
 }
 
@@ -3697,6 +4093,12 @@ function lastLoadResult($url = null,$method = null,$content_type = null,$http_co
   debugSection("lastLoadResult");
   global $lastLoad;
   $retval = false;
+  if (!is_null($url)) { if (!is_string($url)) { $url = null; } }
+  if (!is_null($method)) { if (!is_string($method)) { $method = null; } }
+  if (!is_null($content_type)) { if (!is_string($content_type)) { $content_type = null; } }
+  if (!is_null($http_code)) { if (!is_numeric($http_code)) { $http_code = null; } }
+  if (!is_null($scheme)) { if (!is_string($scheme)) { $scheme = null; } }
+  if (!is_null($protocol)) { if (!is_string($protocol)) { $protocol = null; } }
   if (!is_null($url)) { $retval = true; }
   $RequestResponse = lookupHTTPResponse($http_code);
   $is_error = true;
@@ -3761,8 +4163,14 @@ function getLastLoadResult($element = null) {
   } else {
     if (is_string($element)) {
       $element = normalizeKey($element);
-      if (isset($lastLoad[$element])) {
-        $return_data = $lastLoad[$element];
+      if (isValidLastLoadElement($element)) {
+        if (isset($lastLoad[$element])) {
+          $return_data = $lastLoad[$element];
+        } else {
+          $return_data = null;
+        }
+      } else {
+        $return_data = null;
       }
     }
   }
@@ -3806,7 +4214,7 @@ function getTime($request_type = TIME_TYPE_ANY) {
   if (!is_numeric($request_type)) { $request_type = TIME_TYPE_ANY; }
   if (is_null($time)) {
     if (($request_type == TIME_TYPE_ANY) || ($request_type == TIME_TYPE_HRTIME)) {
-      if (getCapability("php","hrtime")) { 
+      if (getConfiguration("extensions","hrtime")) { 
         $value = hrtime(true);
         if ($value !== false) {
           $time = $value;
@@ -4082,7 +4490,7 @@ function debugDumpStructures() {
       $report .= "[processed]\n";
       $report .= print_r($processed,true);
       $report .= getConfiguration("logging","separator") . "\n";   
-      if (getCapability("php","put")) {
+      if (getConfiguration("extensions","put")) {
         if (@file_put_contents(getConfiguration("debug","dump_file"), $report) === false) {
           $retval = false;
         } else {
@@ -4112,6 +4520,7 @@ function determineCapabilities() {
   $flag_fileinfo_extension = false;
   $flag_mimetype = false;
   $flag_exif = false;
+  $flag_mbstring = false;
   $flag_gd = false;
   $flag_gmagick = false;
   $flag_imagemagick = false;
@@ -4125,7 +4534,9 @@ function determineCapabilities() {
   if (extension_loaded("gd")) { if (function_exists('getimagesize')) { $flag_gd = true; } }
   if (extension_loaded("imagick")) { $flag_imagemagick = true; }
   if (extension_loaded("gmagick")) { $flag_gmagick = true; }
+  if (extension_loaded("mbstring")) { if (function_exists('mb_detect_encoding')) { $flag_mbstring = true; } }
   if ((extension_loaded("exif")) && (extension_loaded("mbstring"))) { if (function_exists('exif_imagetype')) { $flag_exif = true; } }
+
   if ($flag_fileinfo) { if (defined("FILEINFO_EXTENSION")) {  $flag_fileinfo_extension = true; } }
   addCapability("php","version",phpversion());
   addCapability("php","console",$flag_console);
@@ -4135,6 +4546,7 @@ function determineCapabilities() {
   addCapability("php","put",$flag_put_contents);
   addCapability("php","fileinfo",$flag_fileinfo);
   addCapability("php","fileinfo_extension",$flag_fileinfo_extension);
+  addCapability("php","mbstring",$flag_mbstring);
   addCapability("php","mimetype",$flag_mimetype);
   addCapability("php","gd",$flag_gd);
   addCapability("php","imagemagick",$flag_imagemagick);
@@ -4152,23 +4564,66 @@ function determineCapabilities() {
     addCapability("os","case_sensitive",true);
     if (!defined("DIRECTORY_SEPARATOR ")) { addCapability("os","directory_separator","/"); }
   }
+  
+  setConfiguration("extensions","curl",(getCapability("php","curl")));
+  setConfiguration("extensions","exif",(getCapability("php","exif")));
+  setConfiguration("extensions","get",(getCapability("php","get")));
+  setConfiguration("extensions","put",(getCapability("php","put")));
+  setConfiguration("extensions","mbstring",(getCapability("php","mbstring")));
+  setConfiguration("extensions","fileinfo",(getCapability("php","fileinfo")));
+  setConfiguration("extensions","mimetype",(getCapability("php","mimetype")));
+  setConfiguration("extensions","gd",(getCapability("php","gd")));
+  setConfiguration("extensions","imagemagick",(getCapability("php","imagemagick")));
+  setConfiguration("extensions","gmagick",(getCapability("php","gmagick")));
+  setConfiguration("extensions","hrtime",(getCapability("php","hrtime")));
+  
   debugSection();
 }
+
+function isConfidenceAccepted($level = 0) {
+  $retval = false;
+  $acceptlevel = getConfiguration("global","acceptable_data_confidence");
+  if (is_numeric($level) && is_numeric($acceptlevel)) { 
+    if ($level > 0 && $level >= $acceptlevel) { $retval = true; }
+  }
+  return $retval;
+}
+  
+function getConfidenceText($level = 0) {
+  $retval = "invalid";
+  if (is_numeric($level)) {
+    if ($level >= CONFIDENCE_CERTAIN) {
+      $retval = "certain";
+    } elseif ($level >= CONFIDENCE_HIGH && $level < CONFIDENCE_CERTAIN) {
+      $retval = "high";
+    } elseif ($level >= CONFIDENCE_MEDIUM && $level < CONFIDENCE_HIGH) {
+      $retval = "medium";
+    } elseif ($level >= CONFIDENCE_LOW && $level < CONFIDENCE_MEDIUM) {
+      $retval = "low";
+    } elseif ($level >= CONFIDENCE_UNCERTAIN && $level < CONFIDENCE_LOW) {
+      $retval = "uncertain";
+    } elseif ($level < CONFIDENCE_UNCERTAIN) {
+      $retval = "unknown";
+    }
+  }
+  return $retval;
+}
+
 
 /*  Show Capabilities */
 function showCapabilities($level = TYPE_VERBOSE) {
   debugSection("showCapabilities");
   writeLog("Capabilities:",TYPE_VERBOSE);
-  writeLog("* Extension EXIF Enabled: " . showBoolean(getCapability("php","exif")),TYPE_VERBOSE);
-  writeLog("* Extension FileInfo Enabled: " . showBoolean(getCapability("php","fileinfo")),TYPE_VERBOSE);
-  writeLog("* Extension GD Enabled: " . showBoolean(getCapability("php","gd")),TYPE_VERBOSE);
-  writeLog("* Extension Gmagick Enabled: " . showBoolean(getCapability("php","gmagick")),TYPE_VERBOSE);
-  writeLog("* Extension ImageMagick Enabled: " . showBoolean(getCapability("php","imagemagick")),TYPE_VERBOSE);
-  writeLog("* Extension cURL Enabled: " . showBoolean(getCapability("php","curl")),TYPE_VERBOSE);
-  writeLog("* Function file_get_contents Available: " . showBoolean(getCapability("php","get")),TYPE_VERBOSE);
-  writeLog("* Function file_put_contents Available: " . showBoolean(getCapability("php","put")),TYPE_VERBOSE);
-  writeLog("* Function hrtime Available: " . showBoolean(getCapability("php","hrtime")),TYPE_VERBOSE);
-  writeLog("* Function mime_content_type Available: " . showBoolean(getCapability("php","mimetype")),TYPE_VERBOSE);
+  writeLog("* Extension EXIF Enabled: " . showBoolean(getConfiguration("extensions","exif")),TYPE_VERBOSE);
+  writeLog("* Extension FileInfo Enabled: " . showBoolean(getConfiguration("extensions","fileinfo")),TYPE_VERBOSE);
+  writeLog("* Extension GD Enabled: " . showBoolean(getConfiguration("extensions","gd")),TYPE_VERBOSE);
+  writeLog("* Extension Gmagick Enabled: " . showBoolean(getConfiguration("extensions","gmagick")),TYPE_VERBOSE);
+  writeLog("* Extension ImageMagick Enabled: " . showBoolean(getConfiguration("extensions","imagemagick")),TYPE_VERBOSE);
+  writeLog("* Extension cURL Enabled: " . showBoolean(getConfiguration("extensions","curl")),TYPE_VERBOSE);
+  writeLog("* Function file_get_contents Available: " . showBoolean(getConfiguration("extensions","get")),TYPE_VERBOSE);
+  writeLog("* Function file_put_contents Available: " . showBoolean(getConfiguration("extensions","put")),TYPE_VERBOSE);
+  writeLog("* Function hrtime Available: " . showBoolean(getConfiguration("extensions","hrtime")),TYPE_VERBOSE);
+  writeLog("* Function mime_content_type Available: " . showBoolean(getConfiguration("extensions","mimetype")),TYPE_VERBOSE);
   debugSection();
 }
  
@@ -4178,6 +4633,7 @@ function validateConfiguration() {
   
   validateConfigurationSetting("global","debug",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","blocklist",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("global","acceptable_data_confidence",CONFIG_TYPE_NUMERIC,0,100);
   validateConfigurationSetting("global","api",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","allow_octet_stream",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","icon_size",CONFIG_TYPE_NUMERIC,RANGE_ICON_SIZE_MINIMUM,RANGE_ICON_SIZE_MAXIMUM);
@@ -4209,14 +4665,24 @@ function validateConfiguration() {
   validateConfigurationSetting("logging","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
   
+  validateConfigurationSetting("extensions","curl",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","exif",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","fileinfo",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","gd",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","get",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","gmagick",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","hrtime",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","imagemagick",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","mbstring",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","mimetype",CONFIG_TYPE_BOOLEAN);
+  validateConfigurationSetting("extensions","put",CONFIG_TYPE_BOOLEAN);
+  
   if (getConfiguration("logging","enabled")) {
     if (is_null(getConfiguration("logging","pathname"))) {
-      writeLog("validateConfiguration: pathname is not set, disabling logging option",TYPE_TRACE);
       setConfiguration("logging","enabled",false);
     }
     if (getConfiguration("logging","timestamp")) {
       if (is_null(getConfiguration("logging","timestampformat"))) {
-        writeLog("validateConfiguration: timestampformat is not set, disabling logging timestamp",TYPE_TRACE);
         setConfiguration("logging","timestamp",false);
       }
     }
@@ -4230,7 +4696,6 @@ function validateConfiguration() {
   if (getConfiguration("console","enabled")) {
     if (getConfiguration("console","timestamp")) {
       if (is_null(getConfiguration("console","timestampformat"))) {
-        writeLog("validateConfiguration: timestampformat is not set, disabling console timestamp",TYPE_TRACE);
         setConfiguration("console","timestamp",false);
       }
     }
@@ -4238,23 +4703,76 @@ function validateConfiguration() {
     
   if (getConfiguration("files","store")) {
     if (is_null(getConfiguration("files","local_path"))) {
-        writeLog("validateConfiguration: local_path is not set, disabling store option",TYPE_TRACE);
         setConfiguration("files","store",false);
     } else {
       if (!file_exists(getConfiguration("files","local_path"))) {
-        writeLog("validateConfiguration: local_path is invalid, disabling store option",TYPE_TRACE);
         setConfiguration("files","store",false);
       }
     }
   }
   
-  if (getConfiguration("curl","enabled")) {
+  if (getConfiguration("extensions","curl")) {
     if (!getCapability("php","curl")) {
-      writeLog("validateConfiguration: curl is enabled but not supported, disabling",TYPE_TRACE);
+      setConfiguration("extensions","curl",false);
+    }
+  }
+  if (getConfiguration("extensions","exif")) {
+    if (!getCapability("php","exif")) {
+      setConfiguration("extensions","exif",false);
+    }
+  }
+  if (getConfiguration("extensions","fileinfo")) {
+    if (!getCapability("php","fileinfo_extension")) {
+      setConfiguration("extensions","fileinfo",false);
+    }
+  }
+  if (getConfiguration("extensions","fileinfo")) {
+    if (!getCapability("php","fileinfo")) {
+      setConfiguration("extensions","fileinfo",false);
+    }
+  }
+  if (getConfiguration("extensions","gd")) {
+    if (!getCapability("php","gd")) {
+      setConfiguration("extensions","gd",false);
+    }
+  }
+  if (getConfiguration("extensions","get")) {
+    if (!getCapability("php","get")) {
+      setConfiguration("extensions","get",false);
+    }
+  }
+  if (getConfiguration("extensions","gmagick")) {
+    if (!getCapability("php","gmagick")) {
+      setConfiguration("extensions","gmagick",false);
+    }
+  }  
+  if (getConfiguration("extensions","hrtime")) {
+    if (!getCapability("php","hrtime")) {
+      setConfiguration("extensions","hrtime",false);
+    }
+  }    
+  if (getConfiguration("extensions","imagemagick")) {
+    if (!getCapability("php","imagemagick")) {
+      setConfiguration("extensions","imagemagick",false);
+    }
+  }  
+  if (getConfiguration("extensions","mbstring")) {
+    if (!getCapability("php","mbstring")) {
+      setConfiguration("extensions","mbstring",false);
+    }
+  }
+  if (getConfiguration("extensions","put")) {
+    if (!getCapability("php","put")) {
+      setConfiguration("extensions","put",false);
+    }
+  }
+
+  if (getConfiguration("curl","enabled")) {
+    if (!getConfiguration("extensions","curl")) {
       setConfiguration("curl","enabled",false);
     }
   }
-  
+
   # TO DO:
   #   if saving icons, fully validate by attempting to write a test file to the save path.
   
