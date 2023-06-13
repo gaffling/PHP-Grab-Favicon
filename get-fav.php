@@ -1,6 +1,17 @@
 <?php
 /*
 
+-----------------------------
+Immediate
+-----------------------------
+
+existing code needs updating to use:
+  showValue for debug log entries (handles nulls, invalid types etc)
+  Use isIconWanted / checkIconAcceptance / updateProcessEntry($url,"accepted",true) / isIconAccepted
+  Begin using MIME database
+  
+  
+
 # getimagesize should only be done with a *valid image*
 # list($width, $height, $type, $attr) = getimagesize("img/flag.jpg");  
 
@@ -10,6 +21,7 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Began work on an actual internal mime database to reduce repeated code
   Added SVG detect
   Added new logging levels TYPE_OBJECTS, TYPE_TIMERS
   convertRelativeToAbsolute now has one return path making for easier debugging.
@@ -95,21 +107,17 @@ NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
 TO DO:
 -------------------------------------
-  Option to be more careful about chopping off subdomains
   HTML rendering overhaul
     create a master CSS (still all in one "document")
     create more formatting variables
   Add config for temporary image file use
       script will need read/write permissions
-  Add functions to get image width/height (and verify type)
+  Add functions to get image width/height (and verify type) [partially impelmented]
       Resource paths:
         raw data, file, url
       Data paths:
         exif, gd, imagemagick, gmagick and a fallback
   Add option to actually check icon on disk's size/type? (post save)
-  Change: RegEx search should have simliar path to the new json parser as there can be multiple formats/icons defined
-  Add another fallback:
-    try to identify file (if needed download a temporary file), return mime type using fopen/fread/file_get_contents
   Update HTTP Mode
     parameters via query string or GET/POST
     show icons, if it has a protocol it should use "img src" to the URL not do a base64.
@@ -289,7 +297,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306131516');
+define('PROGRAM_BUILD', '202306131622');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -872,6 +880,9 @@ if (getConfiguration("mode","console")) {
 **    Console and/or File
 **
 */
+initializeMIMEDatabase();
+
+
 
 
 setItem("suppress_logfile", false);
@@ -4286,6 +4297,23 @@ function isValidMIMEElement($element) {
   return $retval;
 }
 
+function isValidMIMESearchElement($element) {
+  debugSection("isValidMIMESearchElement");
+  $retval = false;
+  if (isset($element)) {
+    if (!is_null($element)) {
+      if (is_string($element)) {
+        $element = normalizeKey($element);
+        if ($element == "type") { $retval = true; }
+        if ($element == "alternates") { $retval = true; }
+        if ($element == "extensions") { $retval = true; }
+      }
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
 function isMIMETypeDefined($type) {
   debugSection("isMIMETypeDefined");
   global $mimeDatabase;
@@ -4305,6 +4333,84 @@ function isMIMETypeDefined($type) {
   return $retval;
 }
 
+function isMIMEImage($type) {
+  debugSection("isMIMEImage");
+  $retval = false;
+  $entry = getMIMEDatabaseRecord($type);
+  if ($entry['valid']) { $retval = $entry['image']; }
+  debugSection();
+  return $retval;
+}
+
+function searchMIMEDatabase($element = null,$value) {
+  debugSection("searchMIMEDatabase");
+  global $mimeDatabase;
+  $flag_found = false;
+  $error = null;
+  if (is_null($element)) { $element = "type"; }
+  $element = normalizeKey($element);
+  writeLog(showValue("element",$element) . ", " . showValue("value",$value),TYPE_OBJECTS);
+  if (isValidMIMESearchElement($element)) {
+    foreach ($mimeDatabase as $item) {
+      if ($item['valid']) {
+        if (is_array($item[$element])) {
+          if (in_array($value,$item[$element])) {
+            $flag_found = true;
+          }
+        } elseif (is_string($item[$element])) {
+          if ($item[$element] == $value) {
+            $flag_found = true;
+          }
+        } elseif (is_bool($item[$element])) {
+          if ($item[$element] == $value) {
+            $flag_found = true;
+          }
+        } elseif (is_numeric($item[$element])) {
+          if ($item[$element] == $value) {
+            $flag_found = true;
+          }
+        }
+      }
+      if ($flag_found) {
+        break;
+      }
+    }
+  } else {
+    if (isValidMIMEElement($element)) {
+      $error = "invalid search element";
+    } else { 
+      $error = "invalid element";
+    }
+  }
+  if (!$flag_found) {
+    $item = getEmptyMIMEEntry();
+  }
+    
+  $record = array();
+  $record['error'] = $error;
+  $record['success'] = $flag_found;
+  $record['item'] = $item;
+  writeLog(showValue("found",$flag_found) . ", " . showValue("error",$error),TYPE_OBJECTS);
+  return $record;
+}
+
+function getMIMEDatabaseRecord($type) {
+  debugSection("getMIMEDatabaseRecord");
+  global $mimeDatabase;
+  $type = normalizeKey($type);
+  $record = getEmptyMIMEEntry();
+  foreach ($mimeDatabase as $item) {
+    if (strcasecmp($item['type'], $type) == 0) {
+      if ($item['valid']) {
+        $record = $item;
+        break;
+      }
+    }
+  }
+  debugSection();
+  return $record;
+}
+
 function getEmptyMIMEEntry() {
   debugSection("getEmptyMIMEEntry");
   $return_object = array(
@@ -4312,6 +4418,7 @@ function getEmptyMIMEEntry() {
     "alternates" => array(),
     "extensions" => array(),
     "image" => false,
+    "valid" => false,
   );
   debugSection();
   return $return_object;
@@ -4337,14 +4444,30 @@ function addMIMEType($type,$alternates = null,$extensions = null,$image = false)
     if (isMIMETypeDefined($type)) {
       # Entry already exists
     } else {
+      $entry['type'] = $type;
       $entry['alternates'] = $alternates;
       $entry['extensions'] = $extensions;
       $entry['image'] = $image;
+      $entry['valid'] = true;
       array_push($mimeDatabase,$entry);
     }
   }
   debugSection();
   return $retval;
+}
+
+function normalizeMIME($content_type) {
+  debugSection("normalizeMIME");
+  if (is_string($content_type)) {
+    $content_type = strtolower($content_type);
+    list($content_type,$content_type_extended) = explode(";",$content_type);
+    $result = searchMIMEDatabase("alternates",$content_type);
+    if ($result['success']) {
+      $content_type = $result['item']['type'];
+    }
+  }
+  debugSection();
+  return $content_type;
 }
 
 /*
@@ -4956,6 +5079,26 @@ function showCapabilities($level = TYPE_VERBOSE) {
   writeLog("* Function hrtime Available: " . showBoolean(getConfiguration("extensions","hrtime")),TYPE_VERBOSE);
   writeLog("* Function mime_content_type Available: " . showBoolean(getConfiguration("extensions","mimetype")),TYPE_VERBOSE);
   debugSection();
+}
+
+/*  Build MIME Type Database */
+function initializeMIMEDatabase() {
+  # Format:
+  #   MIME Type,Alternate MIME Types,Extensions,IsImage?
+  
+  addMIMEType(MIME_TYPE_BINARY);
+  addMIMEType(MIME_TYPE_TEXT);
+  addMIMEType(MIME_TYPE_HTML);
+  addMIMEType(MIME_TYPE_ICO,MIME_TYPE_ICO_ALTERNATE . "," . MIME_TYPE_ICO_MICROSOFT,"ico",true);
+  addMIMEType(MIME_TYPE_BMP,null,"bmp",true);
+  addMIMEType(MIME_TYPE_GIF,null,"gif",true);
+  addMIMEType(MIME_TYPE_WEBP,null,"webp",true);
+  addMIMEType(MIME_TYPE_SVG,null,"svg",true);
+  addMIMEType(MIME_TYPE_AVIF,null,"avif",true);
+  addMIMEType(MIME_TYPE_APNG,null,"apng",true);
+  addMIMEType(MIME_TYPE_TIFF,null,"tif,tiff",true);
+  addMIMEType(MIME_TYPE_JPEG,null,"jpeg,jpg",true);
+  addMIMEType(MIME_TYPE_PNG,null,"png",true);
 }
  
 /*  Validate Configuration */
