@@ -10,7 +10,8 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
-  Added new logging level TYPE_OBJECTS
+  Added SVG detect
+  Added new logging levels TYPE_OBJECTS, TYPE_TIMERS
   convertRelativeToAbsolute now has one return path making for easier debugging.
   Tightened up domain parsing and regex code;
     Domain parsing should be a bit better now
@@ -288,7 +289,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306131315');
+define('PROGRAM_BUILD', '202306131516');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -367,6 +368,7 @@ define('TYPE_DEBUGGING', 32);
 define('TYPE_TRACE', 64);
 define('TYPE_OBJECTS', 128);
 define('TYPE_SPECIAL', 256);
+define('TYPE_TIMERS', 512);
 
 /*  Buffers */
 define('BUFFER_SIZE', 128);
@@ -432,6 +434,23 @@ define('MAGIC_RIFF_STRING', "RIFF");
 define('MAGIC_WEBP_STRING', "WEBP");
 define('MAGIC_VP8_STRING', "VP8");
 
+/*  Common MIME Types */
+define('MIME_TYPE_BINARY', "application/octet-stream");
+define('MIME_TYPE_TEXT', "text/plain");
+define('MIME_TYPE_HTML', "text/html");
+define('MIME_TYPE_WEBP', "image/webp");
+define('MIME_TYPE_JPEG', "image/jpeg");
+define('MIME_TYPE_PNG', "image/png");
+define('MIME_TYPE_GIF', "image/gif");
+define('MIME_TYPE_BMP', "image/bmp");
+define('MIME_TYPE_ICO', "image/x-icon");
+define('MIME_TYPE_ICO_ALTERNATE', "image/ico");
+define('MIME_TYPE_ICO_MICROSOFT', "image/vnd.microsoft.icon");
+define('MIME_TYPE_SVG', "image/svg+xml");
+define('MIME_TYPE_AVIF', "image/avif");
+define('MIME_TYPE_APNG', "image/apng");
+define('MIME_TYPE_TIFF', "image/tiff");
+
 /*
 **  Initialize Arrays and Flags
 */
@@ -445,6 +464,7 @@ $lastLoad = array();
 $statistics = array();
 $functiontrace = array();
 $processed = array();
+$mimeDatabase = array();
 $timers = array();
 
 $flag_log_initialized = 0;
@@ -692,8 +712,8 @@ if (getConfiguration("mode","console")) {
     echo "--notenacious               Try a random API.\n";
     echo "--showconfig                Show running configuration. (default is " . showBoolean(DEFAULT_SHOW_RUNNING_CONFIGURATION) . ")\n";
     echo "--noshowconfig              Skip showing running configuration.\n";
-    echo "--allowoctetstream          Allow MimeType 'application/octet-stream'. (default is " . showBoolean(DEFAULT_ALLOW_OCTET_STREAM) . ")\n";
-    echo "--disallowoctetstream       Block MimeType 'application/octet-stream' for icons.\n";
+    echo "--allowoctetstream          Allow MimeType '" . MIME_TYPE_BINARY . "'. (default is " . showBoolean(DEFAULT_ALLOW_OCTET_STREAM) . ")\n";
+    echo "--disallowoctetstream       Block MimeType '" . MIME_TYPE_BINARY . "' for icons.\n";
     echo "--consolemode               Force console output.\n";
     echo "--noconsolemode             Force HTML output.\n";
     echo "--debug                     Enable debug mode.\n";
@@ -852,6 +872,7 @@ if (getConfiguration("mode","console")) {
 **    Console and/or File
 **
 */
+
 
 setItem("suppress_logfile", false);
 writeLog(getItem("banner"),TYPE_ALL);
@@ -1149,13 +1170,13 @@ function grap_favicon($url) {
           writeLog("No data received, skipping HTML parsing",TYPE_DEBUGGING);
         } else {
           if (is_null($content_type)) { 
-            if (isHTML($content)) { $content_type = "text/html"; } 
+            if (isHTML($content)) { $content_type = MIME_TYPE_HTML; } 
           } else {
-            if ($content_type == "text/plain") { if (isHTML($content)) { $content_type = "text/html"; } }
+            if ($content_type == MIME_TYPE_TEXT) { if (isHTML($content)) { $content_type = MIME_TYPE_HTML; } }
           }
           if (is_null($content_type)) { 
             writeLog("Unable to identify content type, skipping HTML parsing",TYPE_TRACE);
-          } elseif ($content_type == "text/html") {
+          } elseif ($content_type == MIME_TYPE_HTML) {
             $method = "regex";
             writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
             writeLog("Attempting RegEx Match",TYPE_DEBUGGING);
@@ -1946,6 +1967,8 @@ function getMIMETypeFromFile($pathname) {
   debugSection("getMIMETypeFromFile");
   $content_type = null;
   $confidence = 0;
+  $method = "none";
+  writeLog(showValue("pathname",$pathname),TYPE_TRACE);
   if (is_string($pathname)) {
     if (file_exists($pathname)) {
       if (is_null($content_type)) {
@@ -1997,16 +2020,10 @@ function getMIMETypeFromFile($pathname) {
           $confidence = 0;
         }
       }
-      if (is_null($content_type)) {
-        writeLog("pathname='$pathname', content_type=null, confidence=" . getConfidenceText($confidence) . ", method=none",TYPE_TRACE);  
-      } else {
-        writeLog("pathname='$pathname', content_type=$content_type, confidence=" . getConfidenceText($confidence) . ", method=$method",TYPE_TRACE);          
-      }
+      writeLog(showValue("pathname",$pathname) . "', " . showValue("content_type",$content_type) . "', " . showValue("confidence",getConfidenceText($confidence)) . "', " .  showValue("method",$method),TYPE_TRACE);
     } else {
       writeLog("'$pathname' does not exist",TYPE_TRACE);
     }
-  } else {
-    writeLog("pathname is not a string (type=" . gettype($pathname) . ")",TYPE_TRACE);
   }
   debugSection();
   return $content_type;
@@ -2017,17 +2034,19 @@ function getMIMETypeFromBinary($buffer) {
   $content_type = null;
   $confidence = 0;
   $method = "none";
+  $outcome = "failure";
+  $format = "none";
   if (!is_null($buffer)) {
     if (is_string($buffer)) {
       if (strlen($buffer) > 2) {
-        writeLog("Data Stream Meets Minimum Requirements",TYPE_TRACE);
-        
+        writeLog("buffer meets minimum size",TYPE_TRACE);
+        // WEBP
+        $format = "webp";
         if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
-          // WEBP
           if (strlen($buffer) >= 16) {
-            writeLog("Checking Format: WEBP",TYPE_TRACE);
+            writeLog("checking for format: $format",TYPE_TRACE);
             if (substr($buffer,0,4) == MAGIC_RIFF_STRING) {
-              $content_type = "image/webp";
+              $content_type = MIME_TYPE_WEBP;
               $confidence = CONFIDENCE_LOW;
               if (substr($buffer,8,4) == MAGIC_WEBP_STRING) {
                 $confidence = CONFIDENCE_MEDIUM;
@@ -2041,15 +2060,16 @@ function getMIMETypeFromBinary($buffer) {
         }
         
         //  JPEG
+        $format = "webp";
         if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
           if (strlen($buffer) >= 10) {
-            writeLog("Checking Format: JPEG",TYPE_TRACE);
+            writeLog("checking for format: $format",TYPE_TRACE);
             $value = unpack("V",substr($buffer,0,4));
             if (isset($value[1])) {
               if (is_numeric($value[1])) {
                 if ($value[1] == MAGIC_JPG) {
                  if (substr($buffer,6,4) == MAGIC_JPG_STRING) {
-                   $content_type = "image/jpeg";
+                   $content_type = MIME_TYPE_JPEG;
                    $confidence = CONFIDENCE_CERTAIN;
                    $method = "signature";
                  }
@@ -2060,14 +2080,15 @@ function getMIMETypeFromBinary($buffer) {
         }
         
         // PNG
+        $format = "png";
         if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
           if (strlen($buffer) >= 8) {
-            writeLog("Checking Format: PNG",TYPE_TRACE);
+            writeLog("checking for format: $format",TYPE_TRACE);
             $value = unpack("P",substr($buffer,0,8));
             if (isset($value[1])) {
               if (is_numeric($value[1])) {
                 if ($value[1] == MAGIC_PNG) {
-                  $content_type = "image/png";
+                  $content_type = MIME_TYPE_PNG;
                   $confidence = CONFIDENCE_CERTAIN;
                   $method = "signature";
                 }
@@ -2077,16 +2098,17 @@ function getMIMETypeFromBinary($buffer) {
         }
 
         // GIF
+        $format = "gif";
         if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
           if (strlen($buffer) >= 6) {
-            writeLog("Checking Format: GIF",TYPE_TRACE);
+            writeLog("checking for format: $format",TYPE_TRACE);
             if (substr($buffer,0,6) == MAGIC_GIF_STRING87) {
-              $content_type = "image/gif";
+              $content_type = MIME_TYPE_GIF;
               $confidence = CONFIDENCE_CERTAIN;
               $method = "signature";
             }
             if (substr($buffer,0,6) == MAGIC_GIF_STRING89) {
-              $content_type = "image/gif";
+              $content_type = MIME_TYPE_GIF;
               $confidence = CONFIDENCE_CERTAIN;
               $method = "signature";
             }
@@ -2094,12 +2116,13 @@ function getMIMETypeFromBinary($buffer) {
         }
         
         // BMP
+        $format = "bmp";
         if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
           if (strlen($buffer) >= 6) {
-            writeLog("Checking Format: BMP",TYPE_TRACE);
+            writeLog("checking for format: $format",TYPE_TRACE);
             if (substr($buffer,0,2) == MAGIC_BMP) {
               $value = unpack("V",substr($buffer,2,4));
-              $content_type = "image/bmp";
+              $content_type = MIME_TYPE_BMP;
               $confidence = CONFIDENCE_MEDIUM;
               if (isset($value[1])) {
                 if (is_numeric($value[1])) {
@@ -2114,9 +2137,10 @@ function getMIMETypeFromBinary($buffer) {
         }
         
         //  ICO
+        $format = "ico";
         if (is_null($content_type) || $confidence < CONFIDENCE_LOW) {
           if (strlen($buffer) >= 6) {
-            writeLog("Checking Format: ICO",TYPE_TRACE);
+            writeLog("checking for format: $format",TYPE_TRACE);
             $value = unpack("v",substr($buffer,0,2));
             if (isset($value[1])) {
               if (is_numeric($value[1])) {
@@ -2126,7 +2150,7 @@ function getMIMETypeFromBinary($buffer) {
                     if ($value[1] == 1) {
                       $value = unpack("v",substr($buffer,4,2));
                       if ($value > 0) {
-                        $content_type = "image/x-icon";
+                        $content_type = MIME_TYPE_ICO;
                         $confidence = CONFIDENCE_HIGH;
                         $method = "markers";
                       }
@@ -2139,26 +2163,23 @@ function getMIMETypeFromBinary($buffer) {
         }
         
         //  OTHER
+        $format = "ascii/binary";
         if (is_null($content_type)) {
+          writeLog("checking for format: $format",TYPE_TRACE);
+          $pointer = 0;
+          $flag_loop = true;
           $flag_binary = false;
+          $confidence = CONFIDENCE_HIGH;
+          $method = "buffer";
           if (getConfiguration("extensions","mbstring")) {
-            writeLog("Using mbstring to determine content type",TYPE_TRACE);
-            $method = "mb_detect_encoding";
+            $method .= ":mb_detect_encoding";
             if (mb_detect_encoding($buffer) == "ASCII") {
-              $content_type = "text/plain";
-              $confidence = CONFIDENCE_HIGH;
+              $flag_binary = false;
             } else {
-              $content_type = "application/octet-stream";
-              $confidence = CONFIDENCE_HIGH;
+              $flag_binary = true;
             }
           } else {
-            writeLog("Using alternate method to determine content type",TYPE_TRACE);
-            $pointer = 0;
-            $flag_loop = true;
-            $flag_binary = false;
-            $confidence = CONFIDENCE_HIGH;
-            $content_type = "text/plain";
-            $method = "bytecheck";
+            $method .= ":bytecheck";
             do {
               $value = @unpack("C",substr($buffer,$pointer,1));
               if ($value === false) {
@@ -2178,24 +2199,48 @@ function getMIMETypeFromBinary($buffer) {
                 $flag_loop = false;
               }
             } while ($flag_loop);
-            if ($flag_binary) {
-              $content_type = "application/octet-stream";
-            }           
           }
-        }
-        
-        # TO DO:
-        #   SVG
-        if ($content_type == "text/plain") {
+          
+          if ($flag_binary) {
+            $content_type = MIME_TYPE_BINARY;
+          } else {
+            $namespace = getNamespace($buffer);
+            if (!is_null($namespace)) {
+              switch ($namespace) {
+                case "http://www.w3.org/1999/xhtml":
+                  $method .= ":xmlns";
+                  $content_type = MIME_TYPE_HTML;
+                  $confidence = CONFIDENCE_CERTAIN;
+                  break;
+                case "http://www.w3.org/2000/svg":
+                  $method .= ":xmlns";
+                  $content_type = MIME_TYPE_SVG;
+                  $confidence = CONFIDENCE_CERTAIN;
+                  break;
+                default:
+                  $content_type = MIME_TYPE_TEXT;
+              }
+            }
+          }
+          if ($content_type == MIME_TYPE_TEXT) {
+            if (isHTML($buffer)) {
+              $content_type = MIME_TYPE_HTML;
+            }
+          }              
+          if ($content_type == MIME_TYPE_HTML) {
+            $regExPattern = "/<svg/i";
+            if (@preg_match($regExPattern, $buffer)) {
+              $method .= ":svgtag";
+              $content_type = MIME_TYPE_SVG;
+            }
+          }
         }
       }
     }
   }
-  if (is_null($content_type)) {
-    writeLog("Unable to discover content_type",TYPE_TRACE);
-  } else {
-    writeLog("Identified as $content_type with $confidence % confidence using method: $method",TYPE_TRACE);
-  }
+  if (is_null($content_type)) { $outcome = "failure"; } else {  $outcome = "identified"; }
+  writeLog("result: " . $outcome . ": " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . ", " . showValue("confidence",$confidence),TYPE_TRACE);
+  $retval = array();
   $retval['content_type'] = $content_type;
   $retval['confidence'] = $confidence;
   $retval['method'] = $method;
@@ -2208,57 +2253,52 @@ function getMIMETypeUsingEXIF($pathname = null) {
   $content_type = null;
   $confidence = 0;
   $method = "none";
-  if (getConfiguration("extensions","exif")) {
-    $phpUA = ini_get(PHP_OPTION_USER_AGENT);
-    $timeout = ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT);
-    $method = "exif";
-    writeLog("WARNING: exif_imagetype is sometimes refused access to an icon.",TYPE_TRACE);
-    if (!is_null($pathname)) {
-      if (is_string($pathname)) {
-        writeLog("pathname='$pathname', method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
+  $phpUA = ini_get(PHP_OPTION_USER_AGENT);
+  $timeout = ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT);
+  if (!is_null($pathname)) {
+    if (is_string($pathname)) {
+      if (getConfiguration("extensions","exif")) {
+        $method = "exif";
         $filetype = @exif_imagetype($pathname);
         if (!is_null($filetype)) {
           if (function_exists("image_type_to_mime_type")) {
-            $method = "exif:image_type_to_mime_type";
+            $method .= ":image_type_to_mime_type";
             $content_type = image_type_to_mime_type($filetype);
           } else {
             switch ($filetype) {
               case IMAGETYPE_GIF:
-                $content_type = "image/gif";
+                $content_type = MIME_TYPE_GIF;
                 break;
               case IMAGETYPE_JPEG:
-                $content_type = "image/jpeg";
+                $content_type = MIME_TYPE_JPEG;
                 break;
               case IMAGETYPE_PNG:
-                $content_type = "image/png";
+                $content_type = MIME_TYPE_PNG;
                 break;
               case IMAGETYPE_ICO:
-                $content_type = "image/x-icon";
+                $content_type = MIME_TYPE_ICO;
                 break;
               case IMAGETYPE_WEBP:
-                $content_type = "image/webp";
+                $content_type = MIME_TYPE_WEBP;
                 break;
               case IMAGETYPE_BMP:
-                $content_type = "image/bmp";
+                $content_type = MIME_TYPE_BMP;
                 break;
               default:
                 $content_type = null;
                 $file_extension = null;
             }
           }
-          if (!is_null($content_type)) {
-            $file_extension = lookupExtensionByMIME($content_type);
-            $confidence = CONFIDENCE_CERTAIN;
-          } 
         }
-      } else {
-        writeLog("pathname=invalid (" . gettype($pathname) . "), method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
       }
-    } else {
-      writeLog("pathname=null, method=$method, content-type: null, useragent=$phpUA, timeout=$timeout",TYPE_TRACE);
     }
-  } else {
   }
+  if (!is_null($content_type)) {
+    $file_extension = lookupExtensionByMIME($content_type);
+    $confidence = CONFIDENCE_CERTAIN;
+  } 
+  writeLog(showValue("pathname",$pathname) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . ", " . showValue("confidence",$confidence) . ", " . showValue("useragent",$phpUA) . ", " . showValue("timeout",$timeout),TYPE_TRACE);
+  $retval = array();
   $retval['content_type'] = $content_type;
   $retval['confidence'] = $confidence;
   $retval['method'] = $method;  
@@ -2316,40 +2356,40 @@ function isValidImage($content_type = null) {
       $content_type = strtolower($content_type);
       writeLog("Searching for match of $content_type",TYPE_TRACE);
       switch ($content_type) {
-        case "image/ico":
+        case MIME_TYPE_ICO_ALTERNATE:
           $retval = true;
           break;      
-        case "image/x-icon":
+        case MIME_TYPE_ICO:
           $retval = true;
           break;
-        case "image/vnd.microsoft.icon":
+        case MIME_TYPE_ICO_MICROSOFT:
           $retval = true;
           break;
-        case "image/webp":
+        case MIME_TYPE_WEBP:
           $retval = true;
           break;
-        case "image/png":
+        case MIME_TYPE_PNG:
           $retval = true;
           break;
-        case "image/jpeg":
+        case MIME_TYPE_JPEG:
           $retval = true;
           break;
-        case "image/gif":
+        case MIME_TYPE_GIF:
           $retval = true;
           break;
-        case "image/svg+xml":
+        case MIME_TYPE_SVG:
           $retval = true;
           break;
-        case "image/avif":
+        case MIME_TYPE_AVIF:
           $retval = true;
           break;
-        case "image/apng":
+        case MIME_TYPE_APNG:
           $retval = true;
           break;
-        case "image/bmp":
+        case MIME_TYPE_BMP:
           $retval = true;
           break;
-        case "image/tiff":
+        case MIME_TYPE_TIFF:
           $retval = true;
           break;
       }
@@ -2367,40 +2407,40 @@ function lookupExtensionByMIME($content_type = null) {
     $content_type = strtolower($content_type);
     writeLog("Searching for match of $content_type",TYPE_TRACE);
     switch ($content_type) {
-      case "image/ico":
+      case MIME_TYPE_ICO_ALTERNATE:
         $file_extension = "ico";
         break;      
-      case "image/x-icon":
+      case MIME_TYPE_ICO:
         $file_extension = "ico";
         break;
-      case "image/vnd.microsoft.icon":
+      case MIME_TYPE_ICO_MICROSOFT:
         $file_extension = "ico";
         break;
-      case "image/webp":
+      case MIME_TYPE_WEBP:
         $file_extension = "webp";
         break;
-      case "image/png":
+      case MIME_TYPE_PNG:
         $file_extension = "png";
         break;
-      case "image/jpeg":
+      case MIME_TYPE_JPEG:
         $file_extension = "jpg";
         break;
-      case "image/gif":
+      case MIME_TYPE_GIF:
         $file_extension = "gif";
         break;
-      case "image/svg+xml":
+      case MIME_TYPE_SVG:
         $file_extension = "svg";
         break;
-      case "image/avif":
+      case MIME_TYPE_AVIF:
         $file_extension = "avif";
         break;
-      case "image/apng":
+      case MIME_TYPE_APNG:
         $file_extension = "apng";
         break;
-      case "image/bmp":
+      case MIME_TYPE_BMP:
         $file_extension = "bmp";
         break;
-      case "image/tiff":
+      case MIME_TYPE_TIFF:
         $file_extension = "tif";
         break;
     }
@@ -2417,37 +2457,37 @@ function lookupContentTypeByExtension($extension = null) {
     writeLog("Searching for match of $extension",TYPE_TRACE);
     switch ($extension) {
       case "gif":
-        $content_type = "image/gif";
+        $content_type = MIME_TYPE_GIF;
         break;
       case "png":
-        $content_type = "image/png";
+        $content_type = MIME_TYPE_PNG;
         break;
       case "jpg":
-        $content_type = "image/jpeg";
+        $content_type = MIME_TYPE_JPEG;
         break;
       case "jpeg":
-        $content_type = "image/jpeg";
+        $content_type = MIME_TYPE_JPEG;
         break;
       case "ico":
-        $content_type = "image/x-icon";
+        $content_type = MIME_TYPE_ICO;
         break;
       case "svg":
-        $content_type = "image/svg+xml";
+        $content_type = MIME_TYPE_SVG;
         break;
       case "webp":
-        $content_type = "image/webp";
+        $content_type = MIME_TYPE_WEBP;
         break;
       case "avif":
-        $content_type = "image/avif";
+        $content_type = MIME_TYPE_AVIF;
         break;
       case "apng":
-        $content_type = "image/apng";
+        $content_type = MIME_TYPE_APNG;
         break;
       case "bmp":
-        $content_type = "image/bmp";
+        $content_type = MIME_TYPE_BMP;
         break;
       case "tif":
-        $content_type = "image/tiff";
+        $content_type = MIME_TYPE_TIFF;
         break;
     }
   }
@@ -2457,12 +2497,15 @@ function lookupContentTypeByExtension($extension = null) {
 
 /*  Guess Content Type By Extension */
 function guessContentType($extension) {
+  debugSection("guessContentType");
   $content_type = lookupContentTypeByExtension($extension);
+  debugSection();
   return $content_type;
 }
 
 /*  See if we have an HTML document */
 function isHTML($buffer) {
+  debugSection("isHTML");
   $retval = false;
   if (!is_null($buffer)) {
     if (is_string($buffer)) {
@@ -2471,6 +2514,24 @@ function isHTML($buffer) {
       }
     }
   }
+  debugSection();
+  return $retval;
+}
+
+/*  Try to get namespace */
+function getNamespace($buffer) {
+  debugSection("getNamespace");
+  $retval = null;
+  if (!is_null($buffer)) {
+    if (is_string($buffer)) {
+      if (strlen($buffer) > 2) {
+        $regExPattern = '/xmlns=(\'|\")(.*?)\1/i';
+        @preg_match($regExPattern, $buffer, $matchTag);
+        if (isset($matchTag[2])) { if (is_string($matchTag[2])) { $retval = $matchTag[2]; } }
+      }
+    }
+  }
+  debugSection();
   return $retval;
 }
 
@@ -2533,28 +2594,34 @@ function getIconExtension($url, $noFallback = false) {
             $content_type = getMIMEType($content);
             if (!is_null($content_type)) {
               $confidence = CONFIDENCE_CERTAIN;
-              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was application/octet-stream), " . showValue("confidence",$confidence),TYPE_TRACE);
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was " . MIME_TYPE_BINARY . "), " . showValue("confidence",$confidence),TYPE_TRACE);
             }
           }
           if (!is_null($content_type)) {
-            if ($content_type == "application/octet-stream") {
+            if ($content_type == MIME_TYPE_BINARY) {
               $method = "getMIMEType";
               $content_type = getMIMEType($content);
               $confidence = CONFIDENCE_CERTAIN;
-              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was application/octet-stream), " . showValue("confidence",$confidence),TYPE_TRACE);
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was " . MIME_TYPE_BINARY . "), " . showValue("confidence",$confidence),TYPE_TRACE);
             }
           }
           if (!is_null($content_type)) {
             $method = "mimetype";
             writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type),TYPE_TRACE);
             switch ($content_type) {
-              case "text/html":
+              case MIME_TYPE_TEXT:
                 $noFallback = true;
                 $file_extension = null;
                 $is_valid = false;
                 $reason = "not an image";
                 break;
-              case "application/octet-stream":
+              case MIME_TYPE_HTML:
+                $noFallback = true;
+                $file_extension = null;
+                $is_valid = false;
+                $reason = "not an image";
+                break;
+              case MIME_TYPE_BINARY:
                 if (!getConfiguration("global","allow_octet_stream")) {
                   $noFallback = true;
                   $file_extension = null;
@@ -2978,13 +3045,14 @@ function debugMode() {
     if ($log_level & TYPE_TRACE) { $retval = true; }
     if ($log_level & TYPE_OBJECTS) { $retval = true; }
     if ($log_level & TYPE_SPECIAL) { $retval = true; }
-    
+    if ($log_level & TYPE_TIMERS) { $retval = true; }
   }
   if ($console_enabled) {
     if ($console_level & TYPE_DEBUGGING) { $retval = true; }
     if ($console_level & TYPE_TRACE) { $retval = true; }
     if ($console_level & TYPE_OBJECTS) { $retval = true; }
     if ($console_level & TYPE_SPECIAL) { $retval = true; }
+    if ($console_level & TYPE_TIMERS) { $retval = true; }
   }
   debugSection();
   return $retval;
@@ -3131,6 +3199,11 @@ function writeLog($message = null,$type = TYPE_ALL,$special = array()) {
       $string_type = "[OBJECT] ";
       $html_style = HTML_STYLE_TRACE;
     }        
+    if ($type & TYPE_TIMERS)
+    {
+      $string_type = "[TIMER] ";
+      $html_style = HTML_STYLE_TRACE;
+    }            
 
     //  Process special directives
     if (!empty($special)) {
@@ -4185,6 +4258,95 @@ function isIconAccepted($url) {
   debugSection();
   return $retval;
 }
+
+/*
+**  MIME Database Controller
+**
+**  type        string    mime-type
+**  alternates  array     depreciated/other type names
+**  extensions  array     file extensions
+**  image       boolean   is an image
+**
+*/
+function isValidMIMEElement($element) {
+  debugSection("isValidMIMEElement");
+  $retval = false;
+  if (isset($element)) {
+    if (!is_null($element)) {
+      if (is_string($element)) {
+        $element = normalizeKey($element);
+        if ($element == "type") { $retval = true; }
+        if ($element == "alternates") { $retval = true; }
+        if ($element == "extensions") { $retval = true; }
+        if ($element == "image") { $retval = true; }
+      }
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
+function isMIMETypeDefined($type) {
+  debugSection("isMIMETypeDefined");
+  global $mimeDatabase;
+  $retval = false;
+  if (is_string($type)) {
+    $type = normalizeKey($type);
+    foreach ($mimeDatabase as $item) {
+      if (isset($item['type'])) {
+        if ($item['type'] == $type) {
+          $retval = true;
+          break;
+        }
+      }
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
+function getEmptyMIMEEntry() {
+  debugSection("getEmptyMIMEEntry");
+  $return_object = array(
+    "type" => null,
+    "alternates" => array(),
+    "extensions" => array(),
+    "image" => false,
+  );
+  debugSection();
+  return $return_object;
+}
+
+function addMIMEType($type,$alternates = null,$extensions = null,$image = false) {
+  debugSection("addMIMEType");
+  global $mimeDatabase;
+  $retval = false;
+  $entry = getEmptyMIMEEntry();
+  if (!is_null($alternates)) {
+    if (is_string($alternates)) {
+      $alternates = explode(",",str_replace(array(",",";"," "),",",$alternates));
+    }
+  }
+  if (!is_null($extensions)) {
+    if (is_string($extensions)) {
+      $extensions = explode(",",str_replace(array(",",";"," "),",",$extensions));
+    }
+  }      
+  if (is_string($type)) {
+    $type = normalizeKey($type);
+    if (isMIMETypeDefined($type)) {
+      # Entry already exists
+    } else {
+      $entry['alternates'] = $alternates;
+      $entry['extensions'] = $extensions;
+      $entry['image'] = $image;
+      array_push($mimeDatabase,$entry);
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
 /*
 **  Last Load Result Controller
 **
@@ -4428,11 +4590,11 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
   $flag_start_timer = false;
   $found_key = array_search($name, array_column($timers, 'name'));
   if ($found_key === false) {
-    writeLog("Timer for '$name' can be created, not found",TYPE_OBJECTS);
+    writeLog("Timer for '$name' can be created, not found",TYPE_TIMERS);
     $flag_start_timer = true;
   } else {
     if (!array_key_exists($found_key,$timers)) {
-      writeLog("Timer for '$name' can be created, found ($found_key) but array key is missing",TYPE_OBJECTS);
+      writeLog("Timer for '$name' can be created, found ($found_key) but array key is missing",TYPE_TIMERS);
       $flag_start_timer = true;
     }
   }
@@ -4440,7 +4602,7 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
     $entry = getEmptyTimer();
     $stopwatch = getTime($type);
     if ($stopwatch['time'] != -1) {
-      writeLog("Starting Timer for '$name'",TYPE_OBJECTS);
+      writeLog("Starting Timer for '$name'",TYPE_TIMERS);
       $entry['name'] = $name;
       $entry['start'] = $stopwatch['time'];
       $entry['type'] =  $stopwatch['type'];
@@ -4451,11 +4613,11 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
       $retval = $entry['start'];
       array_push($timers,$entry);
     } else {
-      writeLog("Failed to Start Timer for '$name'",TYPE_OBJECTS);
+      writeLog("Failed to Start Timer for '$name'",TYPE_TIMERS);
       $retval = -1;
     }
   } else {
-    writeLog("Timer '$name' already exists.",TYPE_OBJECTS);
+    writeLog("Timer '$name' already exists.",TYPE_TIMERS);
   }
   debugSection();
   return $retval;
@@ -4471,7 +4633,7 @@ function stopTimer($name,$elapsed = false) {
   if ($found_key !== false) {
     if (array_key_exists($found_key,$timers)) {
       if ($timers[$found_key]['running']) {
-        writeLog("Stopping Timer for '$name' ($found_key), return elapsed? " . showBoolean($elapsed),TYPE_OBJECTS);
+        writeLog("Stopping Timer for '$name' ($found_key), return elapsed? " . showBoolean($elapsed),TYPE_TIMERS);
         $stopwatch = getTime($timers[$found_key]['type']);
         if ($stopwatch['time'] != -1) {
           $timers[$found_key]['finish'] = $stopwatch['time'];
@@ -4495,7 +4657,7 @@ function stopTimer($name,$elapsed = false) {
           $retval = -1;      
         }
       } else {
-        writeLog("Timer for '$name' already stopped, return elapsed? " . showBoolean($elapsed),TYPE_OBJECTS);
+        writeLog("Timer for '$name' already stopped, return elapsed? " . showBoolean($elapsed),TYPE_TIMERS);
         if ($elapsed) {
           $retval = $timers[$found_key]['elapsed'];
         } else {
@@ -4503,10 +4665,10 @@ function stopTimer($name,$elapsed = false) {
         }
       }
     } else {
-      writeLog("Request to stop timer '$name' which has a missing key",TYPE_OBJECTS);
+      writeLog("Request to stop timer '$name' which has a missing key",TYPE_TIMERS);
     }
   } else {
-    writeLog("Request to stop timer '$name' which does not exist",TYPE_OBJECTS);
+    writeLog("Request to stop timer '$name' which does not exist",TYPE_TIMERS);
   }
   debugSection();
   return $retval;
@@ -4809,7 +4971,7 @@ function validateConfiguration() {
   validateConfigurationSetting("global","tenacious",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","showconfig",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("console","enabled",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_OBJECTS + TYPE_SPECIAL);
+  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_OBJECTS + TYPE_SPECIAL + TYPE_TIMERS);
   validateConfigurationSetting("console","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
@@ -4830,7 +4992,7 @@ function validateConfiguration() {
   validateConfigurationSetting("http","default_protocol_fallback",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("logging","append",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("logging","enabled",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("logging","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_OBJECTS + TYPE_SPECIAL);
+  validateConfigurationSetting("logging","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_OBJECTS + TYPE_SPECIAL + TYPE_TIMERS);
   validateConfigurationSetting("logging","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
   
