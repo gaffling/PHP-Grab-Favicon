@@ -10,6 +10,7 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  Added new logging level TYPE_OBJECTS
   convertRelativeToAbsolute now has one return path making for easier debugging.
   Tightened up domain parsing and regex code;
     Domain parsing should be a bit better now
@@ -287,7 +288,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306131222');
+define('PROGRAM_BUILD', '202306131315');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -364,7 +365,8 @@ define('TYPE_VERBOSE', 8);
 define('TYPE_ERROR', 16);
 define('TYPE_DEBUGGING', 32);
 define('TYPE_TRACE', 64);
-define('TYPE_SPECIAL', 128);
+define('TYPE_OBJECTS', 128);
+define('TYPE_SPECIAL', 256);
 
 /*  Buffers */
 define('BUFFER_SIZE', 128);
@@ -1101,12 +1103,12 @@ function grap_favicon($url) {
     #       get hash
     #       test against icon and block lists
     #   
-    writeLog(showValue("url",$url) . ", " . showValue("protocol",$protocol) . ", " . showValue("domain",$domain) . ", " . showValue("core",$core_domain),TYPE_DEBUGGING);
+    writeLog(showValue("url",$url) . ", " . showValue("protocol",$protocol) . ", " . showValue("domain",$domain) . ", " . showValue("core",$core_domain) . ", " . showValue("trySelf",$trySelf),TYPE_DEBUGGING);
 
     if ($trySelf) {
       $method = "direct";
       
-      // Try Direct Load
+      # Direct Load
       if (isIconWanted($url)) {
         $favicon = addFavIconToURL($url);
         writeLog("Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
@@ -1123,53 +1125,36 @@ function grap_favicon($url) {
           unset($favicon);
         }
       }
-      
-      # TO DO:
-      #   Change to use isIconWanted
-      if (empty($favicon)) {
-        // Load Page
+
+      # HTML Parsing
+      if (isIconWanted($url)) {
         $content = load($url);
         if (isLastLoadResultValid()) {
           $http_code = getLastLoadResult("http_code");
           $RequestData = lookupHTTPResponse($http_code);
           if ($RequestData['ok']) {
             $content_type = getLastLoadResult("content_type");
-            if (is_null($content_type)) {
-              writeLog("url='$url', last load contains content_type: null",TYPE_TRACE);
-            } else {
-              if (is_string($content_type)) {
-                writeLog("url='$url', last load contains content_type: $content_type)",TYPE_TRACE);
-              } else {
-                writeLog("url='$url', last load contains content_type: " . gettype($content_type),TYPE_TRACE);
-              }
-            }
           } else {
-            writeLog("url='$url', last load result returned an error=" . $RequestData['code'] . " (" . $RequestData['description'] . ")",TYPE_TRACE);
             if (is_null($http_code)) {
               $content_type = getLastLoadResult("content_type");
-              if (is_null($content_type)) {
-                writeLog("no http code or content_type returned from server",TYPE_TRACE);
-              } else {
-                writeLog("no http code returned from server",TYPE_TRACE);
-              }
             } else {
               $content = null;
-              writeLog("server response was " . $RequestData['code'] . " " . $RequestData['description'],TYPE_TRACE);
             }
           }
         } else {
-          writeLog("url='$url', last load result was invalid",TYPE_TRACE);
+          # $content = null;
         }
+        writeLog(showValue("url",$url) . ", load result:" . showValue("valid",$RequestData['ok']) . ", " . showValue("response",$RequestData['code'],false) . ", " . showValue("description",$RequestData['description'],false) . ", " . showValue("content_type",$content_type),TYPE_TRACE);
         if (is_null($content)) {
-          writeLog("No data received",TYPE_DEBUGGING);
+          writeLog("No data received, skipping HTML parsing",TYPE_DEBUGGING);
         } else {
-          if (is_null($content_type)) {
-            if (isHTML($content)) { $content_type = "text/html"; }
+          if (is_null($content_type)) { 
+            if (isHTML($content)) { $content_type = "text/html"; } 
           } else {
             if ($content_type == "text/plain") { if (isHTML($content)) { $content_type = "text/html"; } }
           }
           if (is_null($content_type)) { 
-            writeLog("Unable to identify content type",TYPE_TRACE);
+            writeLog("Unable to identify content type, skipping HTML parsing",TYPE_TRACE);
           } elseif ($content_type == "text/html") {
             $method = "regex";
             writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
@@ -1186,6 +1171,17 @@ function grap_favicon($url) {
                   writeLog("Found Match, Building Link",TYPE_DEBUGGING);
                   $favicon = convertRelativeToAbsolute(trim($matchUrl[2]), $protocol . '://'.$domain.'/', $url_port);
                   writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
+                  $flag_accepted = checkIconAcceptance($favicon);
+                  if ($flag_accepted) {
+                    updateProcessEntry($url,"accepted",true);
+                    updateProcessEntry($url,"state",STATE_FOUND);
+                    writeLog("RegEx search succeeded",TYPE_DEBUGGING);
+                  } else {
+                    updateProcessEntry($url,"accepted",false);
+                    updateProcessEntry($url,"state",STATE_WANTED);
+                    writeLog("RegEx search failed",TYPE_DEBUGGING);
+                    unset($favicon);
+                  }
                 } else {
                   writeLog("Failed To Find Match",TYPE_DEBUGGING);
                 }
@@ -1200,20 +1196,21 @@ function grap_favicon($url) {
           }
         }
 
-        // If there is no Match: Try if there is a Favicon in the Root of the Domain
-        if (empty($favicon)) {
+        # Direct Match/Root
+        if (isIconWanted($url)) {
           $method = "direct/root";
           $favicon = addFavIconToURL($protocol . '://'.$domain);
           writeLog("Attempting Direct Match using '$favicon'",TYPE_DEBUGGING);
-
-          // Try to Load Favicon
-          # if ( !@getimagesize($favicon) ) {
-          # https://www.php.net/manual/en/function.getimagesize.php
-          # Do not use getimagesize() to check that a given file is a valid image.
           $attemptCount++;
-          $fileExtension = getIconExtension($favicon,false);
-          if (!$fileExtension['valid']) {
-            writeLog("Failed Direct Match using '$favicon'",TYPE_DEBUGGING);
+          $flag_accepted = checkIconAcceptance($favicon);
+          if ($flag_accepted) {
+            updateProcessEntry($url,"accepted",true);
+            updateProcessEntry($url,"state",STATE_FOUND);
+            writeLog("RegEx search succeeded",TYPE_DEBUGGING);
+          } else {
+            updateProcessEntry($url,"accepted",false);
+            updateProcessEntry($url,"state",STATE_WANTED);
+            writeLog("RegEx search failed",TYPE_DEBUGGING);
             unset($favicon);
           }
         }
@@ -1221,7 +1218,7 @@ function grap_favicon($url) {
     }
 
     // If nothing works: Get the Favicon from API
-    if ((!isset($favicon)) || (empty($favicon))) {
+    if (isIconWanted($url)) {
       $api_count = getAPICount();
       
       writeLog("Falling Back to API, $api_count are defined and enabled",TYPE_DEBUGGING);
@@ -1403,9 +1400,13 @@ function grap_favicon($url) {
                   }
                   if ($flag_accepted) {
                     writeLog($section_prefix . "$method: Request URL '$favicon' was successful",TYPE_DEBUGGING);  
+                    updateProcessEntry($url,"accepted",true);
+                    updateProcessEntry($url,"state",STATE_FOUND);
                     break;
                   } else {
                     writeLog($section_prefix . "$method: Request URL '$favicon' did not return a valid icon or it was rejected",TYPE_DEBUGGING);
+                    updateProcessEntry($url,"accepted",false);
+                    updateProcessEntry($url,"state",STATE_WANTED);
                     unset($favicon);
                   }
                 } else {
@@ -2532,7 +2533,7 @@ function getIconExtension($url, $noFallback = false) {
             $content_type = getMIMEType($content);
             if (!is_null($content_type)) {
               $confidence = CONFIDENCE_CERTAIN;
-              writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was application/octet-stream), " . showValue("confidence",$confidence),TYPE_TRACE);
             }
           }
           if (!is_null($content_type)) {
@@ -2540,12 +2541,12 @@ function getIconExtension($url, $noFallback = false) {
               $method = "getMIMEType";
               $content_type = getMIMEType($content);
               $confidence = CONFIDENCE_CERTAIN;
-              writeLog("url='$url', method=$method, content-type=$content_type; (was application/octet-stream)",TYPE_TRACE);
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was application/octet-stream), " . showValue("confidence",$confidence),TYPE_TRACE);
             }
           }
           if (!is_null($content_type)) {
             $method = "mimetype";
-            writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type),TYPE_TRACE);
             switch ($content_type) {
               case "text/html":
                 $noFallback = true;
@@ -2572,14 +2573,13 @@ function getIconExtension($url, $noFallback = false) {
           }
           if (is_null($content_type)) {
             if (getConfiguration("extensions","exif")) {
+              $method = "exif";
               $fileCheck = getMIMETypeUsingEXIF($url);
               $content_type = $fileCheck['content_type'];
               $confidence = $fileCheck['confidence'];
               $method = $fileCheck['method'];
-              if (is_null($content_type)) {
-                writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
-              } else {
-                writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type). ", " . showValue("confidence",$confidence),TYPE_TRACE);
+              if (!is_null($content_type)) {
                 $file_extension = lookupExtensionByMIME($content_type);
               }
             }
@@ -2592,10 +2592,8 @@ function getIconExtension($url, $noFallback = false) {
             $content_type = $fileCheck['content_type'];
             $confidence = $fileCheck['confidence'];
             $method = $method . ":" . $fileCheck['method'];
-            if (is_null($content_type)) {
-              writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
-            } else {
-              writeLog("url='$url', method=$method, content-type=$content_type",TYPE_TRACE);
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . ", " . showValue("confidence",$confidence),TYPE_TRACE);
+            if (!is_null($content_type)) {
               $file_extension = lookupExtensionByMIME($content_type);
             }
           }
@@ -2603,7 +2601,7 @@ function getIconExtension($url, $noFallback = false) {
         if (is_null($file_extension)) {
           if (!$noFallback) {
             $method = "extension";
-            writeLog("url='$url', method=$method, content-type=null",TYPE_TRACE);
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type),TYPE_TRACE);
             $extension = @preg_replace('/^.*\.([^.]+)$/D', '$1', $url);
             if (isValidType($extension)) {
               $file_extension = $extension;
@@ -2978,11 +2976,14 @@ function debugMode() {
   if ($log_enabled) {
     if ($log_level & TYPE_DEBUGGING) { $retval = true; }
     if ($log_level & TYPE_TRACE) { $retval = true; }
+    if ($log_level & TYPE_OBJECTS) { $retval = true; }
     if ($log_level & TYPE_SPECIAL) { $retval = true; }
+    
   }
   if ($console_enabled) {
     if ($console_level & TYPE_DEBUGGING) { $retval = true; }
     if ($console_level & TYPE_TRACE) { $retval = true; }
+    if ($console_level & TYPE_OBJECTS) { $retval = true; }
     if ($console_level & TYPE_SPECIAL) { $retval = true; }
   }
   debugSection();
@@ -3013,15 +3014,11 @@ function initializeLogFile() {
           $flag_open_append = false;
           $log_write_separator = false;
           if (file_exists($log_pathname)) {
-            if ($log_opt_append) { 
-              $flag_open_append = true;
-            }
+            if ($log_opt_append) { $flag_open_append = true; }
           }
           if ($flag_open_append) {
             $log_handle = @fopen($log_pathname, 'a+');
             $log_write_separator = true;
-            echo "APPEND: " . showBoolean($log_opt_append) . ", " . showBoolean($flag_open_append) . ", " . showBoolean(getConfiguration("logging","append")) . "\n";
-            
           } else {
             $log_handle = @fopen($log_pathname, 'w+');
           }
@@ -3129,6 +3126,11 @@ function writeLog($message = null,$type = TYPE_ALL,$special = array()) {
       $string_type = "[SPECIAL] ";
       $html_style = HTML_STYLE_TRACE;
     }    
+    if ($type & TYPE_OBJECTS)
+    {
+      $string_type = "[OBJECT] ";
+      $html_style = HTML_STYLE_TRACE;
+    }        
 
     //  Process special directives
     if (!empty($special)) {
@@ -4020,8 +4022,9 @@ function addProcessEntry($url) {
   $retval = false;
   if (is_string($url)) {
     if (isProcessDefined($url)) {
-      writeLog("'$url' already has a processed entry",TYPE_TRACE);
+      writeLog("'$url' already has a processed entry",TYPE_OBJECTS);
     } else {
+      $entry = getEmptyProcessEntry();
       $entry['url'] = normalizeKey($url);
       array_push($processed,$entry);
       $retval = true;
@@ -4116,20 +4119,24 @@ function getEmptyProcessEntry() {
 function getProcessEntry($element,$value) {
   debugSection("getProcessEntry");
   global $processed;
+  $flag_matched = false;
+  writeLog(showValue("element",$element) . ", " . showValue("value",$value),TYPE_OBJECTS);
   $return_object = getEmptyProcessEntry();
-  if (is_string($element)) {
+  if (isValidProcessElement($element)) {
     $element = normalizeKey($element);
     foreach ($processed as $item) {
       if (!is_null($item['url'])) {
         if (isset($item[$element])) {
           if (strcasecmp($item[$element], $value) == 0) {
             $return_object = $item;
+            $flag_matched = true;
             break;
           }
         }
       }
     }
   }
+  writeLog(showValue("matched",$flag_matched,false),TYPE_OBJECTS);
   debugSection();
   return $return_object;
 }
@@ -4139,10 +4146,18 @@ function getProcessEntry($element,$value) {
 function isIconWanted($url) {
   debugSection("isIconWanted");
   $retval = false;
+  writeLog(showValue("url",$url),TYPE_TRACE);
   if (is_string($url)) {
     $object = getProcessEntry("url",$url);
-    if (!empty($object)) {
-      if (isset($object['state'])) { if ($object['state'] == STATE_WANTED) { $retval = true; } }
+    if (empty($object)) {
+      writeLog("getProcessEntry returned an empty object",TYPE_TRACE);
+    } else {
+      writeLog(showValue("state",$object['state']),TYPE_TRACE);
+      if (isset($object['state'])) {
+        if ($object['state'] == STATE_WANTED) {
+          $retval = true;
+        }
+      }
     }
   }
   debugSection();
@@ -4153,10 +4168,14 @@ function isIconWanted($url) {
 function isIconAccepted($url) {
   debugSection("isIconAccepted");
   $retval = false;
+  writeLog(showValue("url",$url),TYPE_TRACE);
   if (is_string($url)) {
     $object = getProcessEntry("url",$url);
-    if (!empty($object)) {
+    if (empty($object)) {
+      writeLog("getProcessEntry returned an empty object",TYPE_TRACE);
+    } else {
       if ((isset($object['state'])) && (isset($object['accepted']))) {
+        writeLog(showValue("state",$object['state']) . ", " . showValue("accepted",$object['accepted']) ,TYPE_TRACE);
         if (($object['state'] == STATE_FOUND) && ($object['accepted'])) {
           $retval = true;
         }
@@ -4409,11 +4428,11 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
   $flag_start_timer = false;
   $found_key = array_search($name, array_column($timers, 'name'));
   if ($found_key === false) {
-    writeLog("Timer for '$name' can be created, not found",TYPE_SPECIAL);
+    writeLog("Timer for '$name' can be created, not found",TYPE_OBJECTS);
     $flag_start_timer = true;
   } else {
     if (!array_key_exists($found_key,$timers)) {
-      writeLog("Timer for '$name' can be created, found ($found_key) but array key is missing",TYPE_SPECIAL);
+      writeLog("Timer for '$name' can be created, found ($found_key) but array key is missing",TYPE_OBJECTS);
       $flag_start_timer = true;
     }
   }
@@ -4421,7 +4440,7 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
     $entry = getEmptyTimer();
     $stopwatch = getTime($type);
     if ($stopwatch['time'] != -1) {
-      writeLog("Starting Timer for '$name'",TYPE_SPECIAL);
+      writeLog("Starting Timer for '$name'",TYPE_OBJECTS);
       $entry['name'] = $name;
       $entry['start'] = $stopwatch['time'];
       $entry['type'] =  $stopwatch['type'];
@@ -4432,11 +4451,11 @@ function startTimer($name,$type = TIME_TYPE_ANY) {
       $retval = $entry['start'];
       array_push($timers,$entry);
     } else {
-      writeLog("Failed to Start Timer for '$name'",TYPE_SPECIAL);
+      writeLog("Failed to Start Timer for '$name'",TYPE_OBJECTS);
       $retval = -1;
     }
   } else {
-    writeLog("Timer '$name' already exists.",TYPE_SPECIAL);
+    writeLog("Timer '$name' already exists.",TYPE_OBJECTS);
   }
   debugSection();
   return $retval;
@@ -4452,7 +4471,7 @@ function stopTimer($name,$elapsed = false) {
   if ($found_key !== false) {
     if (array_key_exists($found_key,$timers)) {
       if ($timers[$found_key]['running']) {
-        writeLog("Stopping Timer for '$name' ($found_key), return elapsed? " . showBoolean($elapsed),TYPE_SPECIAL);
+        writeLog("Stopping Timer for '$name' ($found_key), return elapsed? " . showBoolean($elapsed),TYPE_OBJECTS);
         $stopwatch = getTime($timers[$found_key]['type']);
         if ($stopwatch['time'] != -1) {
           $timers[$found_key]['finish'] = $stopwatch['time'];
@@ -4476,7 +4495,7 @@ function stopTimer($name,$elapsed = false) {
           $retval = -1;      
         }
       } else {
-        writeLog("Timer for '$name' already stopped, return elapsed? " . showBoolean($elapsed),TYPE_SPECIAL);
+        writeLog("Timer for '$name' already stopped, return elapsed? " . showBoolean($elapsed),TYPE_OBJECTS);
         if ($elapsed) {
           $retval = $timers[$found_key]['elapsed'];
         } else {
@@ -4484,10 +4503,10 @@ function stopTimer($name,$elapsed = false) {
         }
       }
     } else {
-      writeLog("Request to stop timer '$name' which has a missing key",TYPE_SPECIAL);
+      writeLog("Request to stop timer '$name' which has a missing key",TYPE_OBJECTS);
     }
   } else {
-    writeLog("Request to stop timer '$name' which does not exist",TYPE_SPECIAL);
+    writeLog("Request to stop timer '$name' which does not exist",TYPE_OBJECTS);
   }
   debugSection();
   return $retval;
@@ -4518,10 +4537,10 @@ function getTimer($name) {
     $name = normalizeKey($name);
     $found_key = array_search($name, array_column($timers, 'name'));
     if ($found_key !== false) {
-      writeLog("Returning timer object '$name' ($found_key) as requested",TYPE_SPECIAL);
+      writeLog("Returning timer object '$name' ($found_key) as requested",TYPE_OBJECTS);
       $entry = $timers[$found_key];
     } else {
-      writeLog("Timer object '$name' was requested but not found",TYPE_SPECIAL);
+      writeLog("Timer object '$name' was requested but not found",TYPE_OBJECTS);
     }
   }
   debugSection();
@@ -4536,17 +4555,17 @@ function getElapsedTime($name) {
   $name = normalizeKey($name);
   $found_key = array_search($name, array_column($timers, 'name'));
   if ($found_key !== false) {
-    writeLog("Elapsed time for timer '$name' ($found_key) has been requested",TYPE_SPECIAL);
+    writeLog("Elapsed time for timer '$name' ($found_key) has been requested",TYPE_OBJECTS);
     $start = $timers[$found_key]['start'];
     $finish = $timers[$found_key]['finish'];
     $type = $timers[$found_key]['type'];
     if ($timers[$found_key]['elapsed'] != -1) {
       $elapsed = $timers[$found_key]['elapsed'];
-      writeLog("Returning calculated value",TYPE_SPECIAL);
+      writeLog("Returning calculated value",TYPE_OBJECTS);
     } else {
       if ((!is_null($start)) && (!is_null($finish))) {
         if (($start != -1) && ($finish != -1)) {
-          writeLog("Calculated value missing, calculating manually",TYPE_SPECIAL);
+          writeLog("Calculated value missing, calculating manually",TYPE_OBJECTS);
           $elapsed = floatval($finish - $start);
           if ($elapsed != -1) {
             if ($type == TIME_TYPE_HRTIME) {
@@ -4560,7 +4579,7 @@ function getElapsedTime($name) {
         if ($start != -1) {
           $stopwatch = getTime($type);
           if ($stopwatch['time'] != -1) {
-            writeLog("Calculated running value",TYPE_SPECIAL);
+            writeLog("Calculated running value",TYPE_OBJECTS);
             $elapsed = floatval($stopwatch['time'] - $start);
             if ($elapsed != -1) {
               if ($type == TIME_TYPE_HRTIME) {
@@ -4790,7 +4809,7 @@ function validateConfiguration() {
   validateConfigurationSetting("global","tenacious",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("global","showconfig",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("console","enabled",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
+  validateConfigurationSetting("console","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_OBJECTS + TYPE_SPECIAL);
   validateConfigurationSetting("console","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","verbose",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("curl","showprogress",CONFIG_TYPE_BOOLEAN);  
@@ -4811,7 +4830,7 @@ function validateConfiguration() {
   validateConfigurationSetting("http","default_protocol_fallback",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("logging","append",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("logging","enabled",CONFIG_TYPE_BOOLEAN);
-  validateConfigurationSetting("logging","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_SPECIAL);
+  validateConfigurationSetting("logging","level",CONFIG_TYPE_NUMERIC,0,TYPE_ALL + TYPE_NOTICE + TYPE_WARNING + TYPE_VERBOSE + TYPE_ERROR + TYPE_DEBUGGING + TYPE_TRACE + TYPE_OBJECTS + TYPE_SPECIAL);
   validateConfigurationSetting("logging","timestamp",CONFIG_TYPE_BOOLEAN);
   validateConfigurationSetting("mode","console",CONFIG_TYPE_BOOLEAN);
   
