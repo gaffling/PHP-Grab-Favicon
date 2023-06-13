@@ -1,13 +1,6 @@
 <?php
 /*
 
-reading the API .ini should be a settable define
-the new api json structure needs to be added to the default api list
-should have a define to try to read get-fav.ini in current folder (overridden with --config obviously)
-should be able to specify a API path like config (or reference it in the config file)
-should probably add iconhorse to the default list
-
-
 # getimagesize should only be done with a *valid image*
 # list($width, $height, $type, $attr) = getimagesize("img/flag.jpg");  
 
@@ -17,6 +10,11 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
+  convertRelativeToAbsolute now has one return path making for easier debugging.
+  Tightened up domain parsing and regex code;
+    Domain parsing should be a bit better now
+    RegEx portion pays more attention to HTTP responses and verifies that the content is html before proceeding.
+    If RegEx has a hit, the URL will now retain the port if non-standard
   Fixed an issue where the log could be initialized too soon and not honor some settings
   Image identification fallbacks added to local file loading
   Added new 'extensions' section to the ini, it's mostly for testing but could be used if something isn't working right.
@@ -289,7 +287,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306121848');
+define('PROGRAM_BUILD', '202306131222');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -1025,8 +1023,8 @@ debugDumpStructures();
 *****************************************************/
 function grap_favicon($url) {
   incrementStatistic("process_counter");
-  debugSection("grap_favicon(" . getStatistic("process_counter") . ")");
-  $instanceName = "grap_favicon_" . getStatistic("process_counter");
+  $instanceName = "grap_favicon(" . getStatistic("process_counter") . ")";
+  debugSection($instanceName);
   startTimer($instanceName);
   
   // URL to lower case
@@ -1050,7 +1048,7 @@ function grap_favicon($url) {
   if (!$consoleMode) {
     // avoid script runtime timeout
     $max_execution_time = ini_get(PHP_OPTION_MAX_EXECUTION_TIME);
-    set_time_limit(0); // 0 = no timelimit
+    if ($max_execution_time > 0) { set_time_limit(0);  }
   }
   
   if (addProcessEntry($url)) {
@@ -1075,33 +1073,26 @@ function grap_favicon($url) {
       if (isset($parsed_url['pass'])) { $url_password = $parsed_url['pass']; } 
       if (isset($parsed_url['path'])) { $url_path = $parsed_url['path']; } 
       
-      # TO DO:
-      #   should see if this is handling more complex names correctly:
-      #     e.g. cdn.subdomain.company.com
-      #          company.com:port
-      
       // Check Domain
       $domainParts = explode('.', $domain);
       if (empty($domainParts)) {
+        $core_domain = $domain;
+      } else {
+        if (count($domainParts) >= 2) {
+          $www_key = array_search("www",$domainParts);
+          if ($www_key !== false) {
+            unset($domainParts[$www_key]);
+            $domain = implode('.', $domainParts);
+          }
+          $temp = $domainParts;
+          array_pop($temp);
+          $core_domain = implode('.', $temp);
+        } else {
           $core_domain = $domain;
-        } else {
-        if(count($domainParts) >= 2) {
-          $core_domain = $domainParts[count($domainParts)-2];
-        }
-        
-        if(count($domainParts) == 3 and $domainParts[0]!='www') {
-          // With Subdomain (if not www)
-          $domain = $domainParts[0].'.'.
-                    $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-        } else if (count($domainParts) >= 2) {
-          // Without Subdomain
-          $domain = $domainParts[count($domainParts)-2].'.'.$domainParts[count($domainParts)-1];
-        } else {
-          // Without http(s)
-          $domain = $url;
         }
       }
     }
+
     
     # TO DO:
     #   if option is enabled:
@@ -1110,7 +1101,7 @@ function grap_favicon($url) {
     #       get hash
     #       test against icon and block lists
     #   
-    writeLog("Protocol: $protocol, Domain: $domain",TYPE_DEBUGGING);
+    writeLog(showValue("url",$url) . ", " . showValue("protocol",$protocol) . ", " . showValue("domain",$domain) . ", " . showValue("core",$core_domain),TYPE_DEBUGGING);
 
     if ($trySelf) {
       $method = "direct";
@@ -1133,40 +1124,79 @@ function grap_favicon($url) {
         }
       }
       
+      # TO DO:
+      #   Change to use isIconWanted
       if (empty($favicon)) {
         // Load Page
-        $html = load($url);
-
-        if (empty($html)) {
-          writeLog("No data received",TYPE_WARNING);
-        } else {
-          $method = "regex";
-          $attemptCount++;
-          # TO DO:
-          #   this needs to be a loop as there can be multiple types defined
-          writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
-          writeLog("Attempting RegEx Match",TYPE_DEBUGGING);
-          // Find Favicon with RegEx
-          $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
-          if (@preg_match($regExPattern, $html, $matchTag)) {
-            writeLog("RegEx Initial Pattern Matched\n" . print_r($matchTag,true),TYPE_DEBUGGING);
-            $regExPattern = '/href=(\'|\")(.*?)\1/i';
-            if (isset($matchTag[1]) && @preg_match($regExPattern, $matchTag[1], $matchUrl)) {
-              writeLog("RegEx Secondary Pattern Matched",TYPE_DEBUGGING);
-              if (isset($matchUrl[2])) {
-                writeLog("Found Match, Building Link",TYPE_DEBUGGING);
-                // Build Favicon Link
-                $favicon = convertRelativeToAbsolute(trim($matchUrl[2]), $protocol . '://'.$domain.'/');
-                writeLog("Located Icon in HTML as '$favicon'",TYPE_DEBUGGING);
-                writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
-              } else {
-                writeLog("Failed To Find Match",TYPE_DEBUGGING);
-              }
+        $content = load($url);
+        if (isLastLoadResultValid()) {
+          $http_code = getLastLoadResult("http_code");
+          $RequestData = lookupHTTPResponse($http_code);
+          if ($RequestData['ok']) {
+            $content_type = getLastLoadResult("content_type");
+            if (is_null($content_type)) {
+              writeLog("url='$url', last load contains content_type: null",TYPE_TRACE);
             } else {
-              writeLog("RegEx Secondary Pattern Failed To Match",TYPE_DEBUGGING);
+              if (is_string($content_type)) {
+                writeLog("url='$url', last load contains content_type: $content_type)",TYPE_TRACE);
+              } else {
+                writeLog("url='$url', last load contains content_type: " . gettype($content_type),TYPE_TRACE);
+              }
             }
           } else {
-            writeLog("RegEx Initial Pattern Failed To Match",TYPE_DEBUGGING);
+            writeLog("url='$url', last load result returned an error=" . $RequestData['code'] . " (" . $RequestData['description'] . ")",TYPE_TRACE);
+            if (is_null($http_code)) {
+              $content_type = getLastLoadResult("content_type");
+              if (is_null($content_type)) {
+                writeLog("no http code or content_type returned from server",TYPE_TRACE);
+              } else {
+                writeLog("no http code returned from server",TYPE_TRACE);
+              }
+            } else {
+              $content = null;
+              writeLog("server response was " . $RequestData['code'] . " " . $RequestData['description'],TYPE_TRACE);
+            }
+          }
+        } else {
+          writeLog("url='$url', last load result was invalid",TYPE_TRACE);
+        }
+        if (is_null($content)) {
+          writeLog("No data received",TYPE_DEBUGGING);
+        } else {
+          if (is_null($content_type)) {
+            if (isHTML($content)) { $content_type = "text/html"; }
+          } else {
+            if ($content_type == "text/plain") { if (isHTML($content)) { $content_type = "text/html"; } }
+          }
+          if (is_null($content_type)) { 
+            writeLog("Unable to identify content type",TYPE_TRACE);
+          } elseif ($content_type == "text/html") {
+            $method = "regex";
+            writeLog("Examining Web Page for Icons",TYPE_DEBUGGING);
+            writeLog("Attempting RegEx Match",TYPE_DEBUGGING);
+            $regExPattern = '/((<link[^>]+rel=.(icon|shortcut\sicon|alternate\sicon)[^>]+>))/i';
+            if (@preg_match($regExPattern, $content, $matchTag)) {
+              writeLog("RegEx Initial Pattern Matched",TYPE_DEBUGGING);
+              writeLog(print_r($matchTag,true),TYPE_SPECIAL);
+              $regExPattern = '/href=(\'|\")(.*?)\1/i';
+              if (isset($matchTag[0]) && @preg_match($regExPattern, $matchTag[0], $matchUrl)) {
+                writeLog("RegEx Secondary Pattern Matched",TYPE_DEBUGGING);
+                writeLog(print_r($matchUrl,true),TYPE_SPECIAL);
+                if (isset($matchUrl[2])) {
+                  writeLog("Found Match, Building Link",TYPE_DEBUGGING);
+                  $favicon = convertRelativeToAbsolute(trim($matchUrl[2]), $protocol . '://'.$domain.'/', $url_port);
+                  writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
+                } else {
+                  writeLog("Failed To Find Match",TYPE_DEBUGGING);
+                }
+              } else {
+                writeLog("RegEx Secondary Pattern Failed To Match",TYPE_DEBUGGING);
+              }
+            } else {
+              writeLog("RegEx Initial Pattern Failed To Match",TYPE_DEBUGGING);
+            }
+          } else {
+            writeLog("RegEx Skipped, Did Not Receive HTML",TYPE_DEBUGGING);
           }
         }
 
@@ -1645,16 +1675,16 @@ function addFavIconToURL($url) {
 function load($url) {
   debugSection("load");
   $content = null;
+  writeLog(showValue("url",$url),TYPE_TRACE);
   if (!is_string($url)) {
     if (debugMode()) {
-      writeLog("URL requested for load is type (" . gettype($url) . ") instead of string, var_dump to stdout follows",TYPE_ERROR);
-      var_dump($url);
-    } else {
-      writeLog("URL requested for load is type (" . gettype($url) . ") instead of string",TYPE_ERROR);
+      writeLog("URL requested for load is type (" . gettype($url) . ") instead of string!",TYPE_ERROR);
+      writeLog(print_r($url),TYPE_ERROR);
     }
   } else {
     $content_hash = null;
     $content_type = null;
+    $content_type_extended = null;
     $http_code = null;
     $method = null;
     $previous_url = getGlobal('redirect_url');
@@ -1683,10 +1713,10 @@ function load($url) {
       }
     }
     if (is_null($content)) {
-      writeLog("loading: url='$url'",TYPE_TRACE);
+      writeLog("loading: " . showValue("url",$url),TYPE_TRACE);
       if (getConfiguration("curl","enabled")) {
         $method = "curl";
-        writeLog("$method: Operation Timeout=" . getConfiguration("http","http_timeout") . ", Connection Timeout=" . getConfiguration("http","http_timeout_connect") . ", DNS Timeout=" . getConfiguration("http","dns_timeout"),TYPE_TRACE);
+        writeLog("$method: " . showValue("Operation Timeout",getConfiguration("http","http_timeout")) . ", " . showValue("Connection Timeout",getConfiguration("http","http_timeout_connect")) . ", " . showValue("DNS Timeout",getConfiguration("http","dns_timeout")),TYPE_TRACE);
         $ch = curl_init($url);
         if (isset($ch)) {
           if (!is_null(getConfiguration("http","useragent"))) { curl_setopt($ch, CURLOPT_USERAGENT, getConfiguration("http","useragent")); }
@@ -1743,7 +1773,7 @@ function load($url) {
             writeLog("$method: attempting to load '$url' but PHP option '" . PHP_OPTION_ALLOW_URL_FOPEN . "' is set to false",TYPE_ERROR);
           }
         } else {
-          $method = "stream/file_get_contents";
+          $method .= ":file_get_contents";
           writeLog("$method: attempting to load '$url'",TYPE_TRACE);
           $content = @file_get_contents($url, null, $context);
         }
@@ -1765,7 +1795,7 @@ function load($url) {
       
       # Common
       $RequestData = lookupHTTPResponse($http_code);
-      writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . ")",TYPE_TRACE);
+      writeLog("$method: Return Code=" . $RequestData['code'] . " (" . $RequestData['description'] . ") for '$url', OK? (" . showBoolean($RequestData['ok']) . "), " . showValue("content_type",$content_type),TYPE_TRACE);
       if (is_null($http_code)) {
         writeLog("$method: No HTTP return code received for '$url'",TYPE_TRACE);
       } else {
@@ -1799,13 +1829,15 @@ function load($url) {
         if (is_null($content_type)) {
           writeLog("$method: content_type is reported null, attempting to determine",TYPE_TRACE);
         } else {
+          list($content_type,$content_type_extended) = explode(";",$content_type);
+          $content_type = trim($content_type);
           writeLog("$method: content_type is reported as $content_type, attempting to verify",TYPE_TRACE);
         }
         $content_type = getMIMEType($content);
       }
       if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
     } else {
-      writeLog("Using buffered result for url='$url'",TYPE_TRACE);
+      writeLog("Using buffered result for " . showValue("url",$url),TYPE_TRACE);
     }
   }
   debugSection();
@@ -1818,12 +1850,11 @@ function loadLocalFile($pathname) {
   $content = null;
   $content_type = null;
   $protocol = null;
+  writeLog(showValue("pathname",$pathname),TYPE_TRACE);
   if (!is_string($pathname)) {
     if (debugMode()) {
-      writeLog("Pathname requested for load is type (" . gettype($pathname) . ") instead of string, var_dump to stdout follows",TYPE_ERROR);
-      var_dump($pathname);
-    } else {
-      writeLog("Pathname requested for load is type (" . gettype($pathname) . ") instead of string",TYPE_ERROR);
+      writeLog("Pathname requested for load is type (" . gettype($pathname) . ") instead of string!",TYPE_ERROR);
+      writeLog(print_r($pathname),TYPE_ERROR);
     }
   } else {
     $protocol = parse_url($pathname,PHP_URL_SCHEME);
@@ -2235,17 +2266,96 @@ function getMIMETypeUsingEXIF($pathname = null) {
 }
 
 /* HELPER: Change URL from relative to absolute */
-function convertRelativeToAbsolute($rel, $base) {
+function convertRelativeToAbsolute($rel, $base, $port = null) {
+  debugSection("convertRelativeToAbsolute");
+  writeLog(showValue("rel",$rel) . ", " . showValue("base",$base) . ", " . showValue("port",$port),TYPE_TRACE);
+  $retval = null;
+  $method = "none";
 	extract(parse_url($base));
-	if (strpos( $rel,"//" ) === 0) return $scheme . ':' . $rel;
-	if (parse_url( $rel, PHP_URL_SCHEME ) != '') return $rel;
-	if ($rel[0] == '#' or $rel[0] == '?') return $base . $rel;
-	$path = preg_replace( '#/[^/]*$#', '', $path);
-	if ($rel[0] ==  '/') $path = '';
-	$abs = $host . $path . "/" . $rel;
-	$abs = preg_replace( "/(\/\.?\/)/", "/", $abs);
-	$abs = preg_replace( "/\/(?!\.\.)[^\/]+\/\.\.\//", "/", $abs);
-	return $scheme . '://' . $abs;
+  if (is_null($retval)) {
+    if (strpos( $rel,"//" ) === 0) {
+      $method = "strpos";
+      $retval = $scheme . ':' . $rel;
+    }
+  }
+  if (is_null($retval)) {
+    if (parse_url( $rel, PHP_URL_SCHEME ) != '') {
+      $method = "parse_url";
+      $retval = $rel;
+    }
+  }
+  if (is_null($retval)) {
+    if ($rel[0] == '#' or $rel[0] == '?') {
+      $method = "querystring";
+      $retval = $base . $rel;
+    }
+  }
+  if (is_null($retval)) {
+    $method = "preg_replace";
+    $path = preg_replace( '#/[^/]*$#', '', $path);
+    if ($rel[0] ==  '/') $path = '';
+    $abs = $host;
+    if (!is_null($port)) { $abs .= ":$port"; }
+    $abs .= $path . "/" . $rel;
+    $abs = preg_replace( "/(\/\.?\/)/", "/", $abs);
+    $abs = preg_replace( "/\/(?!\.\.)[^\/]+\/\.\.\//", "/", $abs);
+    $retval = $scheme . '://' . $abs;
+  }
+  writeLog("returning: " . showValue(null,$retval,false) . ", " . showValue("method",$method),TYPE_TRACE);
+  debugSection();
+	return $retval;
+}
+
+/*  Valid Image */
+function isValidImage($content_type = null) {
+  debugSection("isValidImage");
+  $retval = false;
+  if (!is_null($content_type)) {
+    if (is_string($content_type)) {
+      $content_type = strtolower($content_type);
+      writeLog("Searching for match of $content_type",TYPE_TRACE);
+      switch ($content_type) {
+        case "image/ico":
+          $retval = true;
+          break;      
+        case "image/x-icon":
+          $retval = true;
+          break;
+        case "image/vnd.microsoft.icon":
+          $retval = true;
+          break;
+        case "image/webp":
+          $retval = true;
+          break;
+        case "image/png":
+          $retval = true;
+          break;
+        case "image/jpeg":
+          $retval = true;
+          break;
+        case "image/gif":
+          $retval = true;
+          break;
+        case "image/svg+xml":
+          $retval = true;
+          break;
+        case "image/avif":
+          $retval = true;
+          break;
+        case "image/apng":
+          $retval = true;
+          break;
+        case "image/bmp":
+          $retval = true;
+          break;
+        case "image/tiff":
+          $retval = true;
+          break;
+      }
+    }
+  }
+  debugSection();
+  return $retval;
 }
 
 /*  Content Type Lookups */
@@ -2348,6 +2458,19 @@ function lookupContentTypeByExtension($extension = null) {
 function guessContentType($extension) {
   $content_type = lookupContentTypeByExtension($extension);
   return $content_type;
+}
+
+/*  See if we have an HTML document */
+function isHTML($buffer) {
+  $retval = false;
+  if (!is_null($buffer)) {
+    if (is_string($buffer)) {
+      if ($buffer != strip_tags($buffer)) {
+        $retval = true;
+      }
+    }
+  }
+  return $retval;
 }
 
 /* Get Icon Extension / Verify Icon */
@@ -2663,6 +2786,33 @@ function initializePHPAgent() {
   if (!is_null($userAgent)) { ini_set(PHP_OPTION_USER_AGENT, $userAgent); }
   if (ini_get(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT) > getConfiguration("http","http_timeout")) { ini_set(PHP_OPTION_DEFAULT_SOCKET_TIMEOUT, getConfiguration("http","http_timeout")); }
   debugSection();
+}
+
+/*  Show Values */
+function showValue($label = null,$value = null,$showtype = true) {
+  $retval = null;
+  if (is_null($value)) {
+    $value = "null";
+    $type = null;
+  } else {
+    $type = gettype($value);
+  }
+  if (!is_null($label)) {
+    $retval .= $label . "=";
+  }
+  $flag_add_type = $showtype;
+  if (is_bool($value)) {
+    $retval .= showBoolean($value);
+  } elseif (is_string($value)) {
+    $retval .= "'" . $value . "'";
+  } elseif (is_numeric($value)) {
+    $retval .= $value;
+  } else {
+    $retval .= "($type)";
+    $flag_add_type = false;
+  }
+  if ($flag_add_type) { if (!is_null($type)) { $retval .= " ($type)"; } }
+  return $retval;
 }
 
 /*  Show Boolean */
@@ -4614,12 +4764,12 @@ function getConfidenceText($level = 0) {
 function showCapabilities($level = TYPE_VERBOSE) {
   debugSection("showCapabilities");
   writeLog("Capabilities:",TYPE_VERBOSE);
+  writeLog("* Extension cURL Enabled: " . showBoolean(getConfiguration("extensions","curl")),TYPE_VERBOSE);
   writeLog("* Extension EXIF Enabled: " . showBoolean(getConfiguration("extensions","exif")),TYPE_VERBOSE);
   writeLog("* Extension FileInfo Enabled: " . showBoolean(getConfiguration("extensions","fileinfo")),TYPE_VERBOSE);
   writeLog("* Extension GD Enabled: " . showBoolean(getConfiguration("extensions","gd")),TYPE_VERBOSE);
   writeLog("* Extension Gmagick Enabled: " . showBoolean(getConfiguration("extensions","gmagick")),TYPE_VERBOSE);
   writeLog("* Extension ImageMagick Enabled: " . showBoolean(getConfiguration("extensions","imagemagick")),TYPE_VERBOSE);
-  writeLog("* Extension cURL Enabled: " . showBoolean(getConfiguration("extensions","curl")),TYPE_VERBOSE);
   writeLog("* Function file_get_contents Available: " . showBoolean(getConfiguration("extensions","get")),TYPE_VERBOSE);
   writeLog("* Function file_put_contents Available: " . showBoolean(getConfiguration("extensions","put")),TYPE_VERBOSE);
   writeLog("* Function hrtime Available: " . showBoolean(getConfiguration("extensions","hrtime")),TYPE_VERBOSE);
@@ -4711,6 +4861,7 @@ function validateConfiguration() {
     }
   }
   
+  //  Disable any truly unavailable extensions/functions
   if (getConfiguration("extensions","curl")) {
     if (!getCapability("php","curl")) {
       setConfiguration("extensions","curl",false);
