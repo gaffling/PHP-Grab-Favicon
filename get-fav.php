@@ -297,7 +297,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306131622');
+define('PROGRAM_BUILD', '202306151344');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -880,10 +880,8 @@ if (getConfiguration("mode","console")) {
 **    Console and/or File
 **
 */
+
 initializeMIMEDatabase();
-
-
-
 
 setItem("suppress_logfile", false);
 writeLog(getItem("banner"),TYPE_ALL);
@@ -4274,6 +4272,7 @@ function isIconAccepted($url) {
 **  MIME Database Controller
 **
 **  type        string    mime-type
+**  extension   string    primary extension (will use the first in the extensions list if not included when added)
 **  alternates  array     depreciated/other type names
 **  extensions  array     file extensions
 **  image       boolean   is an image
@@ -4289,6 +4288,7 @@ function isValidMIMEElement($element) {
         if ($element == "type") { $retval = true; }
         if ($element == "alternates") { $retval = true; }
         if ($element == "extensions") { $retval = true; }
+        if ($element == "extension") { $retval = true; }
         if ($element == "image") { $retval = true; }
       }
     }
@@ -4417,6 +4417,7 @@ function getEmptyMIMEEntry() {
     "type" => null,
     "alternates" => array(),
     "extensions" => array(),
+    "extension" => null,
     "image" => false,
     "valid" => false,
   );
@@ -4424,7 +4425,7 @@ function getEmptyMIMEEntry() {
   return $return_object;
 }
 
-function addMIMEType($type,$alternates = null,$extensions = null,$image = false) {
+function addMIMEType($type,$alternates = null,$extensions = null,$image = false,$extension = null) {
   debugSection("addMIMEType");
   global $mimeDatabase;
   $retval = false;
@@ -4439,15 +4440,23 @@ function addMIMEType($type,$alternates = null,$extensions = null,$image = false)
       $extensions = explode(",",str_replace(array(",",";"," "),",",$extensions));
     }
   }      
+  if (is_null($extension)) {
+    if (isset($extensions[0])) {
+      if (is_string($extensions[0])) {
+        $extension = $extensions[0];
+      }
+    }
+  }
   if (is_string($type)) {
     $type = normalizeKey($type);
     if (isMIMETypeDefined($type)) {
       # Entry already exists
     } else {
       $entry['type'] = $type;
-      $entry['alternates'] = $alternates;
-      $entry['extensions'] = $extensions;
-      $entry['image'] = $image;
+      if (is_array($alternates)) { $entry['alternates'] = $alternates; }
+      if (is_array($extensions)) { $entry['extensions'] = $extensions; }
+      if (is_string($extension)) { $entry['extension'] = $extension; }
+      if (is_bool($image)) { $entry['image'] = $image; }
       $entry['valid'] = true;
       array_push($mimeDatabase,$entry);
     }
@@ -4464,6 +4473,11 @@ function normalizeMIME($content_type) {
     $result = searchMIMEDatabase("alternates",$content_type);
     if ($result['success']) {
       $content_type = $result['item']['type'];
+    } else {
+      $result = searchMIMEDatabase("type",$content_type);
+      if ($result['success']) {
+        $content_type = $result['item']['type'];
+      }
     }
   }
   debugSection();
@@ -5084,7 +5098,8 @@ function showCapabilities($level = TYPE_VERBOSE) {
 /*  Build MIME Type Database */
 function initializeMIMEDatabase() {
   # Format:
-  #   MIME Type,Alternate MIME Types,Extensions,IsImage?
+  #   MIME Type,Alternate MIME Types,Extensions,IsImage?,Primary Extension
+  #      (if primary extension is omitted, the first Extension will be used)
   
   addMIMEType(MIME_TYPE_BINARY);
   addMIMEType(MIME_TYPE_TEXT);
@@ -5097,7 +5112,7 @@ function initializeMIMEDatabase() {
   addMIMEType(MIME_TYPE_AVIF,null,"avif",true);
   addMIMEType(MIME_TYPE_APNG,null,"apng",true);
   addMIMEType(MIME_TYPE_TIFF,null,"tif,tiff",true);
-  addMIMEType(MIME_TYPE_JPEG,null,"jpeg,jpg",true);
+  addMIMEType(MIME_TYPE_JPEG,null,"jpg,jpeg",true);
   addMIMEType(MIME_TYPE_PNG,null,"png",true);
 }
  
