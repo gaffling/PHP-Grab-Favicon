@@ -2,18 +2,15 @@
 /*
 
 -----------------------------
-Immediate
+IN PROGRESS
 -----------------------------
 
-existing code needs updating to use:
+Existing code being updated to use:
   showValue for debug log entries (handles nulls, invalid types etc)
-  Use isIconWanted / checkIconAcceptance / updateProcessEntry($url,"accepted",true) / isIconAccepted
-  Begin using MIME database
-  
-  
-
-# getimagesize should only be done with a *valid image*
-# list($width, $height, $type, $attr) = getimagesize("img/flag.jpg");  
+  functions isIconWanted / checkIconAcceptance / updateProcessEntry($url,"accepted",true) / isIconAccepted
+  use MIME Database
+  use content buffer
+  ensure we have the icon's hash when it is time to save (for future option)
 
     
 -----------------------------
@@ -21,8 +18,16 @@ CHANGELOG
 
 NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
-  Integrating MIME database and other structures
-  Began work on an actual internal mime database to reduce repeated code
+  Added a content buffer which will be used to prevent reloading data
+  Changed checkIconAcceptance to return an array to better track icon data
+    checkIconAcceptance is intended to be the 'master call' to validate an icon with the following criteria:
+      get information about the potential icon (content_type, extension, hash)
+      check to see if valid image
+      check to see if requested type
+      check to see if requested size
+    hash isn't really used yet but will be later for the save sub-folder option and for updating icons  
+  Began Integrating MIME database and other structures
+  Added MIME Database
   Added SVG detect
   Added new logging levels TYPE_OBJECTS, TYPE_TIMERS
   convertRelativeToAbsolute now has one return path making for easier debugging.
@@ -108,6 +113,7 @@ NOTE: Minor bug fixing is occuring on a continual basis and not noted here)
 -----------------------------
 TO DO:
 -------------------------------------
+  Should load functions also check the content buffer?
   HTML rendering overhaul
     create a master CSS (still all in one "document")
     create more formatting variables
@@ -298,7 +304,7 @@ define('PROJECT_NAME', 'PHP Grab Favicon');
 define('PROGRAM_NAME', 'get-fav');
 define('PROGRAM_MAJOR_VERSION', 1);
 define('PROGRAM_MINOR_VERSION', 2);
-define('PROGRAM_BUILD', '202306151618');
+define('PROGRAM_BUILD', '202306161401');
 define('PROGRAM_COPYRIGHT', 'Copyright 2019-2023 Igor Gaffling');
 
 /*  Debug */
@@ -329,8 +335,10 @@ define('DEFAULT_LOG_SHORT_SEPARATOR', "* * *");
 define('DEFAULT_LOG_TIMESTAMP_CONSOLE', false);
 define('DEFAULT_LOG_TIMESTAMP_FILE', true);
 define('DEFAULT_LOG_TIMESTAMP_FORMAT', "Y-m-d H:i:s");
-define('DEFAULT_LOG_LEVEL_FILE', 255);
+define('DEFAULT_LOG_LEVEL_FILE', 511);
 define('DEFAULT_LOG_LEVEL_CONSOLE', 31);
+define('DEFAULT_SHOW_HTTP_WARNINGS', false);
+define('DEFAULT_SHOW_HTTP_ERRORS', false);
 define('DEFAULT_SIZE', 16);
 define('DEFAULT_MAXIMUM_REDIRECTS', 5);
 define('DEFAULT_LOCAL_PATH', "./");
@@ -474,6 +482,8 @@ $statistics = array();
 $functiontrace = array();
 $processed = array();
 $mimeDatabase = array();
+$contentBuffer = array();
+$iconBuffer = array();
 $timers = array();
 $valueList = array();
 
@@ -544,6 +554,8 @@ setConfiguration("logging","separator",DEFAULT_LOG_SEPARATOR);
 setConfiguration("logging","short_separator",DEFAULT_LOG_SHORT_SEPARATOR);
 setConfiguration("logging","timestamp",DEFAULT_LOG_TIMESTAMP_FILE);
 setConfiguration("logging","timestampformat",DEFAULT_LOG_TIMESTAMP_FORMAT);
+setConfiguration("logging","show_http_warnings",DEFAULT_SHOW_HTTP_WARNINGS);
+setConfiguration("logging","show_http_errors",DEFAULT_SHOW_HTTP_ERRORS);
 setConfiguration("mode","console",getCapability("php","console"));
 
 /* Modify Configuration Depending on Other Options */
@@ -645,6 +657,10 @@ if (getConfiguration("mode","console")) {
     "notimestamp",
     "showtimestamp",
     "hidetimestamp",
+    "showhttpwarnings",
+    "showhttperrors",
+    "hidehttpwarnings",
+    "hidehttperrors",    
     "store",
     "nostore",
     "storeifnew",
@@ -744,6 +760,8 @@ if (getConfiguration("mode","console")) {
     echo "--http-timeout=SECONDS      Set HTTP timeout. (default is " . DEFAULT_HTTP_TIMEOUT . ").\n";
     echo "--connect-timeout=SECONDS   Set HTTP connect timeout. (default is " . DEFAULT_HTTP_CONNECT_TIMEOUT . ").\n";
     echo "--dns-timeout=SECONDS       Set DNS lookup timeout. (default is " . DEFAULT_DNS_TIMEOUT . ").\n";
+    echo "--showhttpwarnings          Show HTTP Warnings. (default is " . DEFAULT_SHOW_HTTP_WARNINGS . ").\n";
+    echo "--showhttperrors            Show HTTP Errors. (default is " . DEFAULT_SHOW_HTTP_ERRORS . ").\n";
     echo "\n";
     echo "Logging:\n";
     echo "--log                       Enable debug logging. (default is " . showBoolean(DEFAULT_LOG_FILE_ENABLED) . ")\n";
@@ -850,6 +868,8 @@ if (getConfiguration("mode","console")) {
   setConfiguration("logging","level",(isset($options['loglevel']))?$options['loglevel']:null);
   setConfiguration("logging","pathname",(isset($options['logfile']))?$options['logfile']:null,null);
   setConfiguration("logging","timestamp",(isset($options['timestamp']))?$options['timestamp']:null,(isset($options['notimestamp']))?$options['notimestamp']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("logging","show_http_warnings",(isset($options['showhttpwarnings']))?$options['showhttpwarnings']:null,(isset($options['hidehttpwarnings']))?$options['hidehttpwarnings']:null,CONFIG_TYPE_SWITCH_PAIR);
+  setConfiguration("logging","show_http_errors",(isset($options['showhttperrors']))?$options['showhttperrors']:null,(isset($options['hidehttperrors']))?$options['hidehttperrors']:null,CONFIG_TYPE_SWITCH_PAIR);
   setConfiguration("mode","console",(isset($options['consolemode']))?$options['consolemode']:null,(isset($options['noconsolemode']))?$options['noconsolemode']:null,CONFIG_TYPE_SWITCH_PAIR);
 
   if (isset($options['nocurl'])) { setConfiguration("curl","enabled",false); }
@@ -1145,7 +1165,8 @@ function grap_favicon($url) {
         $favicon = addFavIconToURL($url);
         writeLog("Direct Load Attempt using '$favicon'",TYPE_DEBUGGING);
         $attemptCount++;
-        $flag_accepted = checkIconAcceptance($favicon);
+        $iconData = checkIconAcceptance($favicon);
+        $flag_accepted = $iconData['accepted'];
         if ($flag_accepted) {
           updateProcessEntry($url,"accepted",true);
           updateProcessEntry($url,"state",STATE_FOUND);
@@ -1203,7 +1224,8 @@ function grap_favicon($url) {
                   writeLog("Found Match, Building Link",TYPE_DEBUGGING);
                   $favicon = convertRelativeToAbsolute(trim($matchUrl[2]), $protocol . '://'.$domain.'/', $url_port);
                   writeLog("Matched Icon as '$favicon'",TYPE_DEBUGGING);
-                  $flag_accepted = checkIconAcceptance($favicon);
+                  $iconData = checkIconAcceptance($favicon);
+                  $flag_accepted = $iconData['accepted'];
                   if ($flag_accepted) {
                     updateProcessEntry($url,"accepted",true);
                     updateProcessEntry($url,"state",STATE_FOUND);
@@ -1234,7 +1256,8 @@ function grap_favicon($url) {
           $favicon = addFavIconToURL($protocol . '://'.$domain);
           writeLog("Attempting Direct Match using '$favicon'",TYPE_DEBUGGING);
           $attemptCount++;
-          $flag_accepted = checkIconAcceptance($favicon);
+          $iconData = checkIconAcceptance($favicon);
+          $flag_accepted = $iconData['accepted'];
           if ($flag_accepted) {
             updateProcessEntry($url,"accepted",true);
             updateProcessEntry($url,"state",STATE_FOUND);
@@ -1379,9 +1402,10 @@ function grap_favicon($url) {
                                 }
                               } 
                               if ($flag_size_ok) {
-                                if (checkIconAcceptance($api_data_link)) {
+                                $iconData = checkIconAcceptance($api_data_link);
+                                $flag_accepted = $iconData['accepted'];
+                                if ($flag_accepted) {
                                   $favicon = $api_data_link;
-                                  $flag_accepted = true;
                                   break;
                                 } else {
                                   unset($favicon);
@@ -1428,7 +1452,8 @@ function grap_favicon($url) {
                 if (!is_null($favicon)) {
                   if (!$flag_accepted) {
                     writeLog($section_prefix . "$method: Checking Icon Acceptance for '$favicon'",TYPE_DEBUGGING);
-                    if (checkIconAcceptance($favicon)) { $flag_accepted = true; }
+                    $iconData = checkIconAcceptance($favicon);
+                    $flag_accepted = $iconData['accepted'];
                   }
                   if ($flag_accepted) {
                     writeLog($section_prefix . "$method: Request URL '$favicon' was successful",TYPE_DEBUGGING);  
@@ -1458,6 +1483,7 @@ function grap_favicon($url) {
     } // END If nothing works: Get the Favicon from API
 
     //  Update Status
+    # TO DO: The following section is going to have some rewriting
     if (isset($favicon)) {
       writeLog("Found Icon at '$favicon'",TYPE_DEBUGGING);
       
@@ -1709,6 +1735,10 @@ function load($url) {
   debugSection("load");
   $content = null;
   writeLog(showValue("url",$url),TYPE_TRACE);
+  
+  if (getConfiguration("logging","show_http_warnings")) { $loglevel_http_warnings = TYPE_WARNING; } else { $loglevel_http_warnings = TYPE_TRACE; }
+  if (getConfiguration("logging","show_http_errors")) { $loglevel_http_errors = TYPE_ERROR; } else { $loglevel_http_errors = TYPE_TRACE; }
+  
   if (!is_string($url)) {
     if (debugMode()) {
       writeLog("URL requested for load is type (" . gettype($url) . ") instead of string!",TYPE_ERROR);
@@ -1849,9 +1879,9 @@ function load($url) {
             writeLog("$method: Got redirect response from server but no URL provided",TYPE_TRACE);
           }
         } elseif ($RequestData['type'] == HTTP_RESPONSE_TYPE_CLIENT_ERROR) {
-          writeLog("Server for '$url' Responded With '" . $RequestData['description'] . "' (" . $RequestData['code'] . ")",TYPE_WARNING);
+          writeLog("Server for '$url' Responded With '" . $RequestData['description'] . "' (" . $RequestData['code'] . ")",$loglevel_http_warnings);
         } elseif ($RequestData['type'] == HTTP_RESPONSE_TYPE_SERVER_ERROR) {
-          writeLog("Server for '$url' Responded With '" . $RequestData['description'] . "' (" . $RequestData['code'] . ")",TYPE_ERROR);
+          writeLog("Server for '$url' Responded With '" . $RequestData['description'] . "' (" . $RequestData['code'] . ")",$loglevel_http_errors);
         }
       }        
       if (is_null($content)) {
@@ -1864,7 +1894,10 @@ function load($url) {
         } else {
           writeLog("$method: content_type is reported as $content_type, attempting to verify",TYPE_TRACE);
         }
-        $content_type = getMIMEType($content);
+        $fileCheck = getMIMEType($content);
+        $content_type = $fileCheck['content_type'];
+        $confidence = $fileCheck['confidence'];
+        $method = $fileCheck['method'];        
       }
       if (!$flag_skip_loadlastresult) { lastLoadResult($url,$method,$content_type,$http_code,$protocol,$protocol_id,$content); }
     } else {
@@ -1898,7 +1931,10 @@ function loadLocalFile($pathname) {
         if (is_null($content)) {
           writeLog("No content for '$pathname'",TYPE_TRACE);
         } else {
-          $content_type = getMIMEType($content);
+          $fileCheck = getMIMEType($content);
+          $content_type = $fileCheck['content_type'];
+          $confidence = $fileCheck['confidence'];
+          $method = $fileCheck['method'];
         }
         lastLoadResult($pathname,"file",$content_type,0,"file",0,$content);
       } else {
@@ -1976,11 +2012,16 @@ function getMIMEType($data) {
     }
   }
   writeLog(showValue("content_type",$content_type) . "', " . showValue("confidence",getConfidenceText($confidence)) . "', " .  showValue("method",$method),TYPE_TRACE);
+  $retval = array();
+  $retval['content_type'] = $content_type;
+  $retval['confidence'] = $confidence;
+  $retval['method'] = $method;  
   debugSection();
-  return $content_type;
+  return $retval;
 }
 
 /*  Get MIME Type from URL */
+/**  This isn't used yet **/
 function getMIMETypeFromURL($url) {
   debugSection("getMIMETypeFromURL");
   $content_type = null;
@@ -2003,7 +2044,10 @@ function getMIMETypeFromURL($url) {
       }
       if (!is_null($content)) {
         if (is_null($content_type)) {
-          $content_type = getMIMEType($content);
+          $fileCheck = getMIMEType($content);
+          $content_type = $fileCheck['content_type'];
+          $confidence = $fileCheck['confidence'];
+          $method = $fileCheck['method'];
         }
       }         
     }
@@ -2485,6 +2529,7 @@ function getIconExtension($url, $noFallback = false) {
   $width = -1;
   $height = -1;
   $reason = "not set";
+  writeLog(showValue("url",$url) . ", " . showValue("noFallback",$noFallback),TYPE_TRACE);
   if (!is_null($url)) {
     if (is_string($url)) {
       if (!empty($url)) {
@@ -2492,26 +2537,16 @@ function getIconExtension($url, $noFallback = false) {
         if (isLastLoadResultValid()) {
           $http_code = getLastLoadResult("http_code");
           $RequestData = lookupHTTPResponse($http_code);
+          $content_type = getLastLoadResult("content_type");
+          writeLog(showValue("lastLoadResult:valid",$RequestData['ok']) . ", " . showValue("content_type",$content_type) . ", " . showValue("http",$RequestData['code'] . $RequestData['description']),TYPE_TRACE);
           if ($RequestData['ok']) {
-            $content_type = getLastLoadResult("content_type");
-            
-            # Debug
-            if (is_array($content_type)) {
-              writeLog("url='$url', last load contains content_type is an array!!!",TYPE_TRACE);
-              var_dump($content_type);
-            }
-            
-            if (is_null($content_type)) {
-              writeLog("url='$url', last load contains content_type: null",TYPE_TRACE);
-            } else {
-              writeLog("url='$url', last load contains content_type: $content_type)",TYPE_TRACE);
-            }
+            $confidence = CONFIDENCE_MEDIUM;
           } else {
-            writeLog("url='$url', last load result returned an error=" . $RequestData['code'] . " (" . $RequestData['description'] . ")",TYPE_TRACE);
+            $confidence = CONFIDENCE_LOW;
             if (is_null($http_code)) {
-              $content_type = getLastLoadResult("content_type");
               if (is_null($content_type)) {
                 $reason = "no http code or content_type returned from server";
+                $confidence = 0;
               } else {
                 $reason = "no http code returned from server";
               }
@@ -2519,33 +2554,36 @@ function getIconExtension($url, $noFallback = false) {
               $content = null;
               $noFallback = true;
               $is_valid = false;
+              $confidence = 0;
               $reason = "server response was " . $RequestData['code'] . " " . $RequestData['description'];
             }
           }
         } else {
-          writeLog("url='$url', last load result was invalid",TYPE_TRACE);
+          writeLog(showValue("lastLoadResult:valid",$RequestData['ok']),TYPE_TRACE);
           $reason = "failed to load url";
         }
         if (!is_null($content)) {
           if (is_null($content_type)) {
-            $method = "getMIMEType";
-            $content_type = getMIMEType($content);
-            if (!is_null($content_type)) {
-              $confidence = CONFIDENCE_CERTAIN;
-              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was " . MIME_TYPE_BINARY . "), " . showValue("confidence",$confidence),TYPE_TRACE);
-            }
+            $method = "content";
+            $fileCheck = getMIMEType($content);
+            $content_type = $fileCheck['content_type'];
+            $confidence = $fileCheck['confidence'];
+            $method = $method . ":" . $fileCheck['method'];
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content_type",$content_type) . " (was " . MIME_TYPE_BINARY . "), " . showValue("confidence",$confidence),TYPE_TRACE);
           }
           if (!is_null($content_type)) {
             if ($content_type == MIME_TYPE_BINARY) {
-              $method = "getMIMEType";
-              $content_type = getMIMEType($content);
-              $confidence = CONFIDENCE_CERTAIN;
-              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . " (was " . MIME_TYPE_BINARY . "), " . showValue("confidence",$confidence),TYPE_TRACE);
+              $method = "content";
+              $fileCheck = getMIMEType($content);
+              $content_type = $fileCheck['content_type'];
+              $confidence = $fileCheck['confidence'];
+              $method = $method . ":" . $fileCheck['method'];
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content_type",$content_type) . " (was " . MIME_TYPE_BINARY . "), " . showValue("confidence",$confidence),TYPE_TRACE);
             }
           }
           if (!is_null($content_type)) {
             $method = "mimetype";
-            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type),TYPE_TRACE);
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content_type",$content_type),TYPE_TRACE);
             switch ($content_type) {
               case MIME_TYPE_TEXT:
                 $noFallback = true;
@@ -2582,8 +2620,8 @@ function getIconExtension($url, $noFallback = false) {
               $fileCheck = getMIMETypeUsingEXIF($url);
               $content_type = $fileCheck['content_type'];
               $confidence = $fileCheck['confidence'];
-              $method = $fileCheck['method'];
-              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type). ", " . showValue("confidence",$confidence),TYPE_TRACE);
+              $method = $method . ":" . $fileCheck['method'];
+              writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content_type",$content_type). ", " . showValue("confidence",$confidence),TYPE_TRACE);
               if (!is_null($content_type)) {
                 $file_extension = lookupExtensionByMIME($content_type);
               }
@@ -2597,7 +2635,7 @@ function getIconExtension($url, $noFallback = false) {
             $content_type = $fileCheck['content_type'];
             $confidence = $fileCheck['confidence'];
             $method = $method . ":" . $fileCheck['method'];
-            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type) . ", " . showValue("confidence",$confidence),TYPE_TRACE);
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content_type",$content_type) . ", " . showValue("confidence",$confidence),TYPE_TRACE);
             if (!is_null($content_type)) {
               $file_extension = lookupExtensionByMIME($content_type);
             }
@@ -2606,10 +2644,13 @@ function getIconExtension($url, $noFallback = false) {
         if (is_null($file_extension)) {
           if (!$noFallback) {
             $method = "extension";
-            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content-type",$content_type),TYPE_TRACE);
+            writeLog(showValue("url",$url) . ", " . showValue("method",$method) . ", " . showValue("content_type",$content_type),TYPE_TRACE);
             $extension = @preg_replace('/^.*\.([^.]+)$/D', '$1', $url);
             if (isValidType($extension)) {
               $file_extension = $extension;
+              if (!is_null($file_extension)) {
+                $confidence = CONFIDENCE_LOW;
+              }
             }
           }
         }
@@ -2621,8 +2662,10 @@ function getIconExtension($url, $noFallback = false) {
         if (is_null($content_type)) {
           if (!is_null($file_extension)) {
             $content_type = guessContentType($file_extension);
-            $confidence = CONFIDENCE_MEDIUM;
+            $confidence = CONFIDENCE_LOW;
             $reason = "content type is a guess";
+            $is_valid = isValidType($file_extension);
+            if (!$is_valid) { $reason .= ", rejected by extension"; }
           }
         }
       } else {
@@ -2653,7 +2696,7 @@ function getIconExtension($url, $noFallback = false) {
       }
     }
   }
-
+  
   $retval = array();
   $retval['valid'] = $is_valid;
   $retval['extension'] = $file_extension;
@@ -2664,6 +2707,8 @@ function getIconExtension($url, $noFallback = false) {
   $retval['height'] = $height;
   $retval['wXh'] = $width . "x" . $height;
   $retval['confidence'] = $confidence;
+  
+  loadContentBuffer($url,$content,$retval);
   
   debugSection();
   return $retval;
@@ -2703,44 +2748,118 @@ function getValidTypes() {
   return $retval;
 }
 
+/*
+**  Master call to validate an icon 
+**
+**  Returns an array
+**    accepted          is icon acceptable? (bool)
+**    valid             icon is valid (boolean)
+**    url               favicon url (string)
+**    content_type      mime content type (string)
+**    confidence        mime content type confidence (numeric, percentage)
+**    method            mime content type determination (string)
+**    reason            reason icon is rejected (string)
+**    error             error messaging (string)
+**    hash              md5 hash of the icon (string)
+**    size              size of the icon (string) or null (format is WIDTHxHEIGHT, i.e. 32x32)
+**
+**    if accepted is false, other fields may be null.
+**
+*/
 function checkIconAcceptance($url = null) {
   debugSection("checkIconAcceptance");
-  $retval = false;
+  $is_accepted = false;
+  $is_valid = null;
+  $extension = null;
+  $content_type = null;
+  $method = null;
+  $reason = null;
+  $size = null;
+  $hash = null;
+  $width = null;
+  $height = null;
+  $size = null;
+  $confidence = 0;
   if (!is_null($url)) {
     if (is_string($url)) {
-      writeLog("Checking Icon Type for '$url'",TYPE_TRACE);
-      $fileData = getIconExtension($url,false);
-      if ($fileData['valid']) {
-        $extension = $fileData['extension'];
-        $content_type = $fileData['content_type'];
-        if ((is_null($extension)) && (is_null($content_type))) {
-          writeLog("getIconExtension returned valid but both extension and content_type are null",TYPE_TRACE);
-        } else {
-          if ((is_null($extension)) && (!is_null($content_type))) {
-            $extension = lookupExtensionByMIME($content_type);
-          }
-          if ((!is_null($extension)) && (is_null($content_type))) {
-            $content_type = lookupContentTypeByExtension($extension);
-          }
-          if (isValidType($extension)) {
-            if (validateIcon($url)) {
-              $retval = true;
-            } else {
-              writeLog("validateIcon rejected the icon",TYPE_TRACE);
-            }
-          } else {
-            writeLog("isValidType rejected the icon",TYPE_TRACE);
-          }
-        }
+      $fileData = getContentBuffer($url);
+      if (empty($fileData)) {
+        writeLog("Getting Icon Type for '$url'",TYPE_TRACE);
+        $fileData = getIconExtension($url,false);
       } else {
-        writeLog("getIconExtension rejected the icon (reason: " . $fileData['reason'] . ")",TYPE_TRACE);
+        writeLog("Using Content Buffer '$url'",TYPE_TRACE);
+      }
+      if (isset($fileData['valid'])) { $is_valid = $fileData['valid']; }
+      if (isset($fileData['extension'])) { $extension = $fileData['extension']; }
+      if (isset($fileData['hash'])) { $hash = $fileData['hash']; }
+      if (isset($fileData['content_type'])) { $content_type = $fileData['content_type']; }
+      if (isset($fileData['method'])) { $method = $fileData['method']; }
+      if (isset($fileData['reason'])) { $reason = $fileData['reason']; }
+      if (isset($fileData['width'])) { $width = $fileData['width']; }
+      if (isset($fileData['height'])) { $height = $fileData['height']; }
+      if (isset($fileData['wXh'])) { $size = $fileData['wXh']; }
+      if (isset($fileData['size'])) { $size = $fileData['size']; }
+      if (isset($fileData['confidence'])) { $confidence = $fileData['confidence']; }
+      if ($size == "-1x-1") { $size = null; }
+
+      if (is_null($is_valid)) {
+        $error = "object has not been validated";
+      } else {
+        if ($is_valid) {
+          if ((is_null($extension)) && (is_null($content_type))) {
+            $error = "icon marked as valid but both extension and content_type are null";
+          } else {
+            if ((is_null($extension)) && (!is_null($content_type))) {
+              $extension = lookupExtensionByMIME($content_type);
+            }
+            if ((!is_null($extension)) && (is_null($content_type))) {
+              $content_type = lookupContentTypeByExtension($extension);
+            }
+            if (isValidType($extension)) {
+              if (validateIcon($url)) {
+                $is_accepted = true;
+              } else {
+                $error = "validateIcon rejected the icon";
+              }
+            } else {
+              $error = "isValidType rejected the icon";
+            }
+          }
+        } else {
+          $error = "url did not return a valid icon";
+        }
       }
     } else {
-      writeLog("URL is not a string",TYPE_TRACE);
+      $error = "URL is not a string";
     }
   } else {
-    writeLog("URL is null",TYPE_TRACE);
+    $error = "URL is null";
   }
+  
+  /*  Refresh Hash and/or Size */
+  if (is_null($hash)) { $hash = getContentBuffer("hash"); }
+  if (is_null($size)) { $size = getContentBuffer("size"); }
+  if ($size == "-1x-1") { $size = null; }
+  
+  # TO DO:
+  #   check blocklist
+  #   check size
+
+  /*  Write Icon Buffer */
+  
+  $retval = array();
+  $retval['accepted'] = $is_accepted;
+  $retval['url'] = $url;
+  $retval['content_type'] = $content_type;
+  $retval['confidence'] = $confidence;
+  $retval['method'] = $method;
+  $retval['valid'] = $is_valid;
+  $retval['reason'] = $reason;
+  $retval['error'] = $error;
+  $retval['hash'] = $hash;
+  $retval['size'] = $size;
+  
+  writeLog("result: " . showValue("accepted",$is_accepted) .  ", " . showValue("valid",$is_valid) . ", " . showValue("reason",$reason) . ", " . showValue("error",$error),TYPE_TRACE);
   debugSection();              
   return $retval;
 }
@@ -4038,6 +4157,8 @@ function deleteStatistic($name) {
 **    state       current status (numeric lookup)
 **    updated     was an updated icon found? (boolean)
 **    accepted    icon has met requirements (if state is STATE_FOUND)
+**    confidence  percentage confidence on type (numeric)
+**    size        size of icon (WxH) (string)
 **
 **  Usage:
 **    Most of the functions are framework, these are the main ones:
@@ -4070,6 +4191,8 @@ function isValidProcessElement($element) {
         if ($element == "state") { $retval = true; }
         if ($element == "updated") { $retval = true; }
         if ($element == "accepted") { $retval = true; }
+        if ($element == "size") { $retval = true; }
+        if ($element == "confidence") { $retval = true; }
       }
     }
   }
@@ -4172,6 +4295,8 @@ function getEmptyProcessEntry() {
     "state" => STATE_WANTED,
     "updated" => false,
     "accepted" => false,
+    "confidence" => CONFIDENCE_UNCERTAIN,
+    "size" => -1,
   );
   debugSection();
   return $return_object;
@@ -4910,11 +5035,87 @@ function resetTimer($name) {
     $timers[$found_key]['elapsed'] = -1;
     $timers[$found_key]['elapsed_hr'] = -1;
     $timers[$found_key]['running'] = false;
-    writeLog("Resetting Timer for '$name' (key: $found_key)",TYPE_SPECIAL);
+    writeLog("Resetting Timer for '$name' (key: $found_key)",TYPE_OBJECTS);
     $retval = true;
   }
   debugSection();
   return $retval;
+}
+
+/*  Content Buffer */
+function loadContentBuffer($url = null,$content = null,$content_type = null) {
+  debugSection("loadContentBuffer");
+  global $contentBuffer;
+  $retval = false;
+  $contentBuffer = array();
+  $content_display = $content;
+  if (!is_null($content)) {
+    if (is_array($content)) {
+      $content_display = count($content);
+    } elseif (is_string($content)) {
+      $content_display = strlen($content);
+    }
+  }
+  writeLog(showValue("url",$url) . ", " . showValue("content",$content_display) . ", " . showValue("content_type",$content_type),TYPE_OBJECTS);
+  if (!is_null($url)) {
+    if (is_string($url)) {
+      $retval = true;
+      $contentBuffer['url'] = $url;
+      $contentBuffer['content'] = $content;
+      $contentBuffer['hash'] = md5($content);
+      $contentBuffer['valid'] = null;
+      $contentBuffer['extension'] = null;
+      $contentBuffer['method'] = null;
+      $contentBuffer['reason'] = null;
+      $contentBuffer['size'] = null;
+      $contentBuffer['width'] = null;
+      $contentBuffer['height'] = null;
+      $contentBuffer['content_type'] = null;
+      $contentBuffer['confidence'] = 0;
+      if (is_array($content_type)) {
+        if (isset($content_type['valid'])) { $contentBuffer['valid']  = $content_type['valid']; }
+        if (isset($content_type['extension'])) { $contentBuffer['extension']  = $content_type['extension']; }
+        if (isset($content_type['content_type'])) { $contentBuffer['content_type']  = $content_type['content_type']; }
+        if (isset($content_type['method'])) { $contentBuffer['method']  = $content_type['method']; }
+        if (isset($content_type['reason'])) { $contentBuffer['reason']  = $content_type['reason']; }
+        if (isset($content_type['width'])) { $contentBuffer['width']  = $content_type['width']; }
+        if (isset($content_type['height'])) { $contentBuffer['height']  = $content_type['height']; }
+        if (isset($content_type['wXh'])) { $contentBuffer['size']  = $content_type['wXh']; }
+        if (isset($content_type['confidence'])) { $contentBuffer['confidence']  = $content_type['confidence']; }
+      } elseif (is_string($content_type)) {
+        $contentBuffer['content_type'] = $content_type;
+      }
+    }
+  }
+  debugSection();
+  return $retval;
+}
+
+function getContentBuffer($element = null) {
+  debugSection("getContentBuffer");
+  writeLog(showValue("element",$element),TYPE_OBJECTS);
+  global $contentBuffer;
+  if (is_null($element)) {
+    $retval = $contentBuffer;
+  } else {
+    if (is_string($element)) {
+      $element = strtolower($element);
+      if ($element == "content_type") { if (isset($contentBuffer['content_type'])) { $retval = $contentBuffer['content_type']; } }
+      if ($element == "hash") { if (isset($contentBuffer['hash'])) {  $retval = $contentBuffer['hash']; } }
+      if ($element == "content") { if (isset($contentBuffer['content'])) {  $retval = $contentBuffer['content']; } }
+      if ($element == "url") { if (isset($contentBuffer['url'])) {  $retval = $contentBuffer['url']; } }
+      if ($element == "confidence") { if (isset($contentBuffer['confidence'])) {  $retval = $contentBuffer['confidence']; } }
+      if ($element == "method") { if (isset($contentBuffer['method'])) {  $retval = $contentBuffer['method']; } }
+      if ($element == "reason") { if (isset($contentBuffer['reason'])) {  $retval = $contentBuffer['reason']; } }
+      if ($element == "width") { if (isset($contentBuffer['width'])) {  $retval = $contentBuffer['width']; } }
+      if ($element == "height") { if (isset($contentBuffer['height'])) {  $retval = $contentBuffer['height']; } }
+      if ($element == "size") { if (isset($contentBuffer['size'])) {  $retval = $contentBuffer['size']; } }
+      if ($element == "valid") { if (isset($contentBuffer['valid'])) {  $retval = $contentBuffer['valid']; } }
+      if ($element == "extension") { if (isset($contentBuffer['extension'])) {  $retval = $contentBuffer['extension']; } }
+    }
+  }
+  debugSection();
+  return $retval;  
 }
 
 /*  Debug Functions */
